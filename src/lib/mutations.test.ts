@@ -477,3 +477,27 @@ describe('applyAuthoritativeState（state-sync 应用路径）', () => {
   })
 })
 
+
+// ===== Phase 2A：关系变更走 mutation 同步（§27） =====
+
+describe('research relation sync（真实 persist payload）', () => {
+  it('Paper.noteIds 关系变更 → paper.update 携带关系字段（Desktop → Tablet 可见）', async () => {
+    const paper = (o: Record<string, unknown> = {}) => ({ id: 'pa1', title: 'PA1', stage: '未分类', category: 'x', status: 'unread' as const, createdAt: 'x', ...o })
+    ;(window as any).electronAPI.syncStorageGet = async () => ({ found: true, data: persistStr({ papers: [paper()], notes: [makeNote('n1')], pomo: {} }) })
+    await window.localStorage.getItem(SYNC_KEY)
+    mockCalls.length = 0
+    // renderer 双写：paper.noteIds + note.paperIds（linkPaperNote 等价）
+    window.localStorage.setItem(SYNC_KEY, persistStr({
+      papers: [paper({ noteIds: ['n1'] })],
+      notes: [makeNote('n1', { paperIds: ['pa1'] })],
+      pomo: {},
+    }))
+    await flushAndWait()
+    // 一次 batch 提交两个 update（原子）
+    expect(mockCalls).toHaveLength(1)
+    expect(mockCalls[0]).toEqual([
+      { type: 'note.update', id: 'n1', entity: makeNote('n1', { paperIds: ['pa1'] }), baseVersion: 1 },
+      { type: 'paper.update', id: 'pa1', entity: paper({ noteIds: ['n1'] }), baseVersion: 1 },
+    ])
+  })
+})

@@ -4,7 +4,7 @@
 import { readFileSync } from 'node:fs'
 
 const CDP = 'http://127.0.0.1:9222'
-const LAN = 'http://127.0.0.1:8900'
+const LAN = 'http://127.0.0.1:' + (process.argv[4] || '8899')
 const TOKEN = process.argv[2]
 const STORAGE_FILE = process.argv[3]
 

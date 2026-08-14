@@ -43,8 +43,40 @@ export default function NewsView() {
   const gotoView = useStore((s) => s.setView)
   const toast = useToast((s) => s.show)
 
-  const load = useCallback(async (silent = false) => {
-    if (!silent) setLoading(true)
+  // Phase 1C Task 4：资讯本地缓存（避免每次打开都重新抓取）
+  const NEWS_CACHE_KEY = 'grad-planner-news-cache'
+  const NEWS_CACHE_TTL_MS = 30 * 60 * 1000 // 30 分钟
+  function readNewsCache(): { items: NewsItem[]; time: string; savedAt: number } | null {
+    try {
+      const raw = localStorage.getItem(NEWS_CACHE_KEY)
+      if (!raw) return null
+      const j = JSON.parse(raw)
+      if (j && Array.isArray(j.items)) return { items: j.items, time: j.time || '', savedAt: j.savedAt || 0 }
+      return null
+    } catch { return null }
+  }
+  function writeNewsCache(items: NewsItem[], time: string) {
+    try {
+      localStorage.setItem(NEWS_CACHE_KEY, JSON.stringify({ items, time, savedAt: Date.now() }))
+    } catch {}
+  }
+
+  const load = useCallback(async (force = false) => {
+    // 1. 缓存优先：立即显示已缓存内容
+    const cache = readNewsCache()
+    const fresh = !!cache && Date.now() - cache.savedAt < NEWS_CACHE_TTL_MS
+    if (cache?.items) {
+      setItems(cache.items)
+      if (cache.time) setLastTime(cache.time)
+    }
+    // 2. 缓存新鲜且非强制刷新 → 不抓取
+    if (fresh && !force) {
+      setError('')
+      setLoading(false)
+      return
+    }
+    // 3. 无缓存 → loading；有缓存 → 后台刷新（不闪 loading）
+    if (!cache?.items) setLoading(true)
     setError('')
     try {
       const api = (window as any).electronAPI
@@ -58,6 +90,10 @@ export default function NewsView() {
         if (res?.ok) {
           setItems(res.items ?? [])
           setLastTime(res.time)
+          writeNewsCache(res.items ?? [], res.time)
+        } else if (cache?.items) {
+          // 刷新失败：保留旧缓存 + 明确提示
+          setError(`更新失败：${res?.error || '未知错误'}（当前显示缓存内容）`)
         } else {
           setError(res?.error || '抓取失败')
         }
@@ -66,14 +102,14 @@ export default function NewsView() {
         setError('资讯功能需要桌面版运行。请使用 Electron 版（npm run desktop 或打包后的 exe）。')
       }
     } catch (e: any) {
-      setError(String(e?.message || e))
+      setError(cache?.items ? '更新失败（当前显示缓存内容）' : String(e?.message || e))
     } finally {
       setLoading(false)
     }
   }, [newsConfig])
 
   useEffect(() => {
-    load(true)
+    load()
     const api = (window as any).electronAPI
     if (api?.onNewsAutoUpdate) {
       api.onNewsAutoUpdate((data: { items: NewsItem[]; time: string }) => {
@@ -273,7 +309,7 @@ export default function NewsView() {
             {lastTime && ` · 更新于 ${format(new Date(lastTime), 'HH:mm')}`}
           </div>
         </div>
-        <button className="btn btn-primary" onClick={() => load()} disabled={loading}>
+        <button className="btn btn-primary" onClick={() => load(true)} disabled={loading}>
           <RefreshCw size={15} className={loading ? 'spin' : ''} />
           {loading ? '抓取中…' : '刷新'}
         </button>

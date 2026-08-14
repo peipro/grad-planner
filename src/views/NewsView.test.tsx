@@ -29,6 +29,7 @@ function setup(fetchArticleImpl?: () => any) {
 
 describe('NewsView saveAsNote（Phase 1C Task 3）', () => {
   beforeEach(() => {
+    window.localStorage.removeItem('grad-planner-news-cache')
     useStore.setState({ newsConfig: { xKey: '', xSecret: '', includeX: false, rssKeys: null, includeHot: true }, notes: [], tasks: [] } as any)
   })
 
@@ -77,5 +78,82 @@ describe('NewsView saveAsNote（Phase 1C Task 3）', () => {
     await new Promise((r) => setTimeout(r, 100))
     expect(screen.queryByTitle('存为笔记')).toBeNull() // 无资讯 → 无保存入口
     expect(useStore.getState().notes).toHaveLength(0)
+  })
+})
+
+// ===== Phase 1C Task 4：News Cache（TTL + 缓存优先 + 手动刷新 + 失败保留） =====
+
+describe('NewsView cache（Phase 1C Task 4）', () => {
+  const CACHE_KEY = 'grad-planner-news-cache'
+
+  beforeEach(() => {
+    window.localStorage.removeItem(CACHE_KEY)
+    useStore.setState({ newsConfig: { xKey: '', xSecret: '', includeX: false, rssKeys: null, includeHot: true }, notes: [], tasks: [] } as any)
+  })
+
+  it('无缓存 → 首次 fetch + loading', async () => {
+    let fetchCalls = 0
+    ;(window as any).electronAPI = {
+      fetchNews: async () => { fetchCalls += 1; return { ok: true, items: [newsItem], time: '2026-08-15T08:00:00.000Z' } },
+      translateText: async (t: string) => ({ ok: true, content: t }),
+      setNewsConfig: async () => true,
+    }
+    render(<NewsView />)
+    await screen.findByText('Test News Title')
+    expect(fetchCalls).toBe(1)
+    // 缓存已写入
+    expect(window.localStorage.getItem(CACHE_KEY)).toBeTruthy()
+  })
+
+  it('缓存新鲜（TTL 内）→ 不 fetch，立即显示缓存', async () => {
+    let fetchCalls = 0
+    window.localStorage.setItem(CACHE_KEY, JSON.stringify({ items: [newsItem], time: '2026-08-15T08:00:00.000Z', savedAt: Date.now() }))
+    ;(window as any).electronAPI = {
+      fetchNews: async () => { fetchCalls += 1; return { ok: true, items: [newsItem], time: '2026-08-15T09:00:00.000Z' } },
+      setNewsConfig: async () => true,
+    }
+    render(<NewsView />)
+    await screen.findByText('Test News Title')
+    expect(fetchCalls).toBe(0) // 新鲜缓存不抓取
+  })
+
+  it('缓存过期 → 立即显示缓存 + 后台 fetch 更新', async () => {
+    let fetchCalls = 0
+    window.localStorage.setItem(CACHE_KEY, JSON.stringify({ items: [newsItem], time: '2026-08-15T00:00:00.000Z', savedAt: Date.now() - 31 * 60 * 1000 }))
+    ;(window as any).electronAPI = {
+      fetchNews: async () => { fetchCalls += 1; return { ok: true, items: [{ ...newsItem, title: '刷新后的新标题' }], time: '2026-08-15T09:00:00.000Z' } },
+      setNewsConfig: async () => true,
+    }
+    render(<NewsView />)
+    await screen.findByText('Test News Title') // 先显示缓存
+    await screen.findByText('刷新后的新标题') // 后台刷新后更新
+    expect(fetchCalls).toBe(1)
+  })
+
+  it('手动刷新（点“刷新”）→ 强制 fetch', async () => {
+    let fetchCalls = 0
+    window.localStorage.setItem(CACHE_KEY, JSON.stringify({ items: [newsItem], time: '2026-08-15T08:00:00.000Z', savedAt: Date.now() }))
+    ;(window as any).electronAPI = {
+      fetchNews: async () => { fetchCalls += 1; return { ok: true, items: [newsItem], time: '2026-08-15T09:00:00.000Z' } },
+      setNewsConfig: async () => true,
+    }
+    render(<NewsView />)
+    await screen.findByText('Test News Title')
+    expect(fetchCalls).toBe(0) // 缓存新鲜未抓取
+    await userEvent.click(screen.getByRole('button', { name: /刷新/ }))
+    await new Promise((r) => setTimeout(r, 50))
+    expect(fetchCalls).toBe(1) // 手动强制刷新
+  })
+
+  it('fetch 失败 → 旧缓存保留 + 明确提示', async () => {
+    window.localStorage.setItem(CACHE_KEY, JSON.stringify({ items: [newsItem], time: '2026-08-15T00:00:00.000Z', savedAt: Date.now() - 31 * 60 * 1000 }))
+    ;(window as any).electronAPI = {
+      fetchNews: async () => ({ ok: false, error: '网络错误' }),
+      setNewsConfig: async () => true,
+    }
+    render(<NewsView />)
+    await screen.findByText('Test News Title') // 缓存仍显示
+    await screen.findByText(/更新失败/) // 明确提示
+    expect(screen.getByText('Test News Title')).toBeTruthy() // 旧缓存未被清除
   })
 })

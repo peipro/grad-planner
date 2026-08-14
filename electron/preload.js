@@ -29,6 +29,14 @@ contextBridge.exposeInMainWorld('electronAPI', {
   syncStorageSet: (data) => ipcRenderer.invoke('sync-storage-set', data),
   syncStorageRemove: () => ipcRenderer.invoke('sync-storage-remove'),
   syncMutate: (mutations) => ipcRenderer.invoke('sync-mutate', mutations),
+  // Phase 1B-2：Main → Renderer state-sync 事件桥（contextBridge，不暴露 ipcRenderer；可 unsubscribe）
+  onStateSync: (cb) => {
+    const listener = (_e, payload) => {
+      try { cb(payload) } catch {}
+    }
+    ipcRenderer.on('state-sync', listener)
+    return () => ipcRenderer.removeListener('state-sync', listener)
+  },
   lanPort: () => ipcRenderer.invoke('lan-port'),
   lanInfo: () => ipcRenderer.invoke('lan-info'),
   lanResetToken: () => ipcRenderer.invoke('lan-reset-token'),

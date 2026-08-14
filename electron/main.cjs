@@ -6,6 +6,7 @@ const { fetchAllNews, fetchArticle, translateText } = require('./news.cjs')
 const { startLanServer, createStorageAccess, lanAddresses } = require('./lan-server.cjs')
 const { createSyncManager } = require('./sync-manager.cjs')
 const { createMutationEngine } = require('./mutation-engine.cjs')
+const { classifyStorageChange } = require('./state-sync.cjs')
 const { createBackupStore } = require('./backup-store.cjs')
 const { createCredentialsStore } = require('./credentials-store.cjs')
 const { isAllowedExternalUrl } = require('./url-security.cjs')
@@ -274,15 +275,34 @@ function scheduleNewsFetch() {
 let syncStorage = null
 let syncWatcher = null
 let syncNotifyTimer = null
-let lastDesktopWrite = 0
 let lanPort = null
 let lanInstance = null
 
-// 写入节流 + reload 前强制落盘（修复：reload 打断节流计时器导致未落盘数据丢失）
+// Phase 1B-2：State Sync（Main → 主窗口 Renderer，替代整页 reload）
+// 职责分离：Mutation Engine 负责“改变事实”；State Sync 负责“传播事实”。
+let lastWrittenHash = null // 自己最近一次写盘的 sha256（fs.watch 自写/外部判断，不用时间窗口）
+
+function broadcastStateSync(state, reason) {
+  for (const win of BrowserWindow.getAllWindows()) {
+    if (win.isDestroyed()) continue
+    // 翻译小窗不需要完整 AppState，不参与订阅（Phase 1B-2 §19）
+    if (String(win.webContents.getURL()).includes('translate.html')) continue
+    try {
+      win.webContents.send('state-sync', { source: 'main', reason, state })
+    } catch {}
+  }
+}
+
+function storageHashOf(file) {
+  try {
+    return crypto.createHash('sha256').update(fs.readFileSync(file)).digest('hex')
+  } catch { return null }
+}
+
+// 写入节流 + reload 前强制落盘（旧 sync-storage-set 路径保留，兼容旧客户端）
 // 见 electron/sync-manager.cjs 的时序语义与测试
 const syncManager = createSyncManager({
   write: (data) => {
-    lastDesktopWrite = Date.now()
     try { syncStorage && syncStorage.write(data) } catch (e) { console.error('[sync] flush write failed:', e) }
   },
   reload: reloadRenderers,
@@ -318,7 +338,14 @@ function startLanAccess() {
 
   // Phase 1B-1：Main authoritative mutation engine。
   // IPC（sync-mutate）与 LAN（POST /api/mutations）共用同一个实例 → 单线程串行，无通道分裂。
-  const mutationEngine = createMutationEngine({ storageFile })
+  // Phase 1B-2：onPersisted 在 persist 成功后广播 state-sync（禁止 persist 前广播“未来状态”）
+  const mutationEngine = createMutationEngine({
+    storageFile,
+    onPersisted: (state) => {
+      lastWrittenHash = storageHashOf(storageFile)
+      broadcastStateSync(state, 'mutation')
+    },
+  })
   ipcMain.handle('sync-mutate', (_e, mutations) => {
     if (!Array.isArray(mutations)) {
       return { ok: false, error: 'invalid_mutation', detail: 'mutations 必须是数组' }
@@ -335,32 +362,27 @@ function startLanAccess() {
   })
   ipcMain.handle('sync-storage-remove', () => {
     syncManager.clear()
-    lastDesktopWrite = Date.now()
     return syncStorage.remove()
   })
   ipcMain.handle('lan-port', () => lanPort)
 
-  // 监控共享数据文件：平板端修改后，桌面端自动刷新页面加载最新数据
-  let lastReloadHash = null
-  const storageHash = () => {
-    try {
-      return crypto.createHash('sha256').update(fs.readFileSync(storageFile)).digest('hex')
-    } catch { return null }
-  }
+  // Phase 1B-2：fs.watch 职责收缩为“检测真正的外部文件变化”。
+  // 外部变化（旧客户端整份写 / 手动编辑）→ 重读权威 → 广播 state-sync（不再 reloadRenderers）。
   try {
     fs.mkdirSync(path.dirname(storageFile), { recursive: true })
-    lastReloadHash = storageHash()
+    lastWrittenHash = storageHashOf(storageFile)
     syncWatcher = fs.watch(path.dirname(storageFile), { persistent: false }, (evt, name) => {
       if (name && name.endsWith('grad-planner-storage.json')) {
-        if (Date.now() - lastDesktopWrite < 800) return // 桌面端自己的写入，跳过
         clearTimeout(syncNotifyTimer)
-        // 内容哈希校验：文件内容未变化时不刷新，避免无意义的整页重载
+        // 短 debounce：合并同一瞬间的多次文件事件（降频，非来源判断）
         syncNotifyTimer = setTimeout(() => {
-          const h = storageHash()
-          if (h === null || h === lastReloadHash) return
-          lastReloadHash = h
-          // 关键修复：reload 前先落盘桌面端 pending 数据，避免平板刷新打断节流写入
-          syncManager.flushAndReload()
+          const h = storageHashOf(storageFile)
+          const cls = classifyStorageChange({ hash: h, lastWrittenHash })
+          if (cls.action !== 'external') return
+          lastWrittenHash = h
+          // 外部写入：以磁盘为权威重新读取 → 广播（磁盘损坏/不可读时 getState 返回 null，不广播）
+          const state = mutationEngine.getState()
+          if (state) broadcastStateSync(state, 'external-storage-change')
         }, 300)
       }
     })

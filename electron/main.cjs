@@ -77,7 +77,6 @@ function createTranslateWindow() {
   if (translateWin && !translateWin.isDestroyed()) {
     translateWin.show()
     translateWin.focus()
-    translateWin.webContents.send('paste-from-clipboard')
     return translateWin
   }
   translateWin = new BrowserWindow({
@@ -133,16 +132,9 @@ ipcMain.on('translate-paste', () => {
   }
 })
 
-// 渲染进程请求打开翻译小窗
+// 渲染进程请求打开翻译小窗（Phase 1C Task 2：打开时不读取剪贴板，由用户点击“从剪贴板导入”）
 ipcMain.on('open-translate-window', () => {
-  const win = createTranslateWindow()
-  if (win) {
-    setTimeout(() => {
-      let text = ''
-      try { text = clipboard.readText() } catch {}
-      win.webContents.send('paste-from-clipboard', { text })
-    }, 200)
-  }
+  createTranslateWindow()
 })
 
 // 全局快捷键：应用未聚焦时也能呼出
@@ -158,16 +150,9 @@ function registerGlobalShortcut() {
   })
   if (!ok1) console.warn('[shortcut] Ctrl+Shift+K 注册失败（可能被其他应用占用）')
 
-  // 全局翻译快捷键 Ctrl+Shift+T：呼出独立置顶翻译小窗，自动带上剪贴板内容
+  // 全局翻译快捷键 Ctrl+Shift+T：呼出独立置顶翻译小窗（Phase 1C Task 2：不自动读剪贴板）
   const ok2 = globalShortcut.register('CommandOrControl+Shift+T', () => {
-    const win = createTranslateWindow()
-    if (win) {
-      setTimeout(() => {
-        let clipText = ''
-        try { clipText = clipboard.readText() } catch {}
-        win.webContents.send('paste-from-clipboard', { text: clipText })
-      }, 200)
-    }
+    createTranslateWindow()
   })
   if (!ok2) console.warn('[shortcut] Ctrl+Shift+T 注册失败（可能被其他应用占用）')
 }

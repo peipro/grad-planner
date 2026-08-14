@@ -1,6 +1,6 @@
 ﻿import React, { useEffect, useRef, useState } from 'react'
 import ReactDOM from 'react-dom/client'
-import { Languages, Loader2, Copy, Check, Minus, X, RotateCcw, Pin } from 'lucide-react'
+import { Languages, Loader2, Copy, Check, Minus, X, RotateCcw, Pin, Clipboard } from 'lucide-react'
 
 declare global {
   interface Window {
@@ -13,7 +13,7 @@ declare global {
   }
 }
 
-function TranslateWindow() {
+export function TranslateWindow() {
   const [input, setInput] = useState('')
   const [output, setOutput] = useState('')
   const [loading, setLoading] = useState(false)
@@ -22,38 +22,24 @@ function TranslateWindow() {
   const [pinned, setPinned] = useState(false)
   const inputRef = useRef<HTMLTextAreaElement>(null)
 
+  // Phase 1C Task 2：打开窗口不再自动读取剪贴板（输入框为空，隐私优先）
   useEffect(() => {
-    // 自动读取剪贴板并翻译
-    const auto = async () => {
-      const api = window.electronAPI
-      if (!api) return
-      try {
-        const clip = await api.readClipboard()
-        if (clip?.ok && clip.text?.trim()) {
-          setInput(clip.text.trim())
-          doTranslate(clip.text.trim())
-        }
-      } catch {}
-    }
-    auto()
     const timer = setTimeout(() => inputRef.current?.focus(), 100)
     return () => clearTimeout(timer)
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
 
-  // 主进程粘贴事件（用户在其他软件复制后再次按下快捷键）
-  useEffect(() => {
+  // 用户主动点击“从剪贴板导入”才读取剪贴板
+  const importFromClipboard = async () => {
     const api = window.electronAPI
-    if (api?.onPasteEvent) {
-      api.onPasteEvent((data) => {
-        if (data.text?.trim()) {
-          setInput(data.text.trim())
-          doTranslate(data.text.trim())
-        }
-      })
-    }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [])
+    if (!api) return
+    try {
+      const clip = await api.readClipboard()
+      if (clip?.ok && clip.text?.trim()) {
+        setInput(clip.text.trim())
+        doTranslate(clip.text.trim())
+      }
+    } catch {}
+  }
 
   const doTranslate = async (text?: string) => {
     const src = (text ?? input).trim()
@@ -105,6 +91,9 @@ function TranslateWindow() {
 
       <div className="tw-actions">
         <span className="tw-hint">Ctrl+Enter 翻译</span>
+        <button className="tw-import" onClick={importFromClipboard} title="从剪贴板导入" disabled={loading}>
+          <Clipboard size={13} /> 从剪贴板导入
+        </button>
         <button className="tw-go" onClick={() => doTranslate()} disabled={loading || !input.trim()}>
           {loading ? <Loader2 size={13} className="spin" /> : <Languages size={13} />}
           {loading ? '…' : '翻译'}
@@ -140,6 +129,8 @@ function TranslateWindow() {
         .tw-input:focus { border-color: #4f6ef7; }
         .tw-actions { display: flex; align-items: center; justify-content: space-between; margin-top: 6px; }
         .tw-hint { font-size: 10px; color: #9aa1b0; }
+        .tw-import { flex: 0 0 auto; display: inline-flex; align-items: center; gap: 4px; padding: 5px 10px; border: 1px solid var(--border, #e3e6ef); border-radius: 8px; background: var(--bg-card, #fff); color: var(--text-2, #5a6072); font-size: 12px; cursor: pointer; }
+        .tw-import:hover { border-color: var(--accent, #4f6ef7); color: var(--accent, #4f6ef7); }
         .tw-go {
           display: flex; align-items: center; gap: 4px; padding: 4px 12px; border-radius: 6px;
           border: none; background: #4f6ef7; color: #fff; font-size: 12px; font-weight: 600; cursor: pointer;
@@ -160,8 +151,11 @@ function TranslateWindow() {
   )
 }
 
-ReactDOM.createRoot(document.getElementById('translate-root')!).render(
-  <React.StrictMode>
-    <TranslateWindow />
-  </React.StrictMode>,
-)
+const rootEl = document.getElementById('translate-root')
+if (rootEl) {
+  ReactDOM.createRoot(rootEl).render(
+    <React.StrictMode>
+      <TranslateWindow />
+    </React.StrictMode>,
+  )
+}

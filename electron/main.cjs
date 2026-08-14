@@ -6,6 +6,7 @@ const { fetchAllNews, fetchArticle, translateText } = require('./news.cjs')
 const { startLanServer, createStorageAccess, lanAddresses } = require('./lan-server.cjs')
 const { createSyncManager } = require('./sync-manager.cjs')
 const { createBackupStore } = require('./backup-store.cjs')
+const { createCredentialsStore } = require('./credentials-store.cjs')
 
 const isDev = !app.isPackaged
 
@@ -177,45 +178,23 @@ ipcMain.handle('load-backup', (_e, name) => backupStore.load(name))
 let newsConfig = { xKey: '', xSecret: '', includeX: false, rssKeys: null, includeHot: true }
 
 // X 密钥经 safeStorage 加密后落盘，避免明文写入 localStorage
-const xCredFile = () => path.join(app.getPath('userData'), 'x-credentials.bin')
-
-function loadXCredentials() {
-  try {
-    const buf = fs.readFileSync(xCredFile())
-    const json = safeStorage.decryptString(buf)
-    const { key, secret } = JSON.parse(json)
-    return { key: String(key || ''), secret: String(secret || '') }
-  } catch {
-    return { key: '', secret: '' }
-  }
-}
-
-function saveXCredentials(key, secret) {
-  try {
-    if (!safeStorage.isEncryptionAvailable()) {
-      return { ok: false, error: '系统不支持加密存储（safeStorage 不可用）' }
-    }
-    const buf = safeStorage.encryptString(JSON.stringify({ key: String(key || ''), secret: String(secret || '') }))
-    fs.writeFileSync(xCredFile(), buf)
-    return { ok: true }
-  } catch (e) {
-    return { ok: false, error: String((e && e.message) || e) }
-  }
-}
+// 安全边界：密钥只存在于主进程；renderer 仅能查询 configured 状态（Task 2）
+const xCredStore = createCredentialsStore(path.join(app.getPath('userData'), 'x-credentials.bin'), safeStorage)
 
 ipcMain.handle('set-news-config', (_e, cfg) => {
   newsConfig = { ...newsConfig, ...cfg }
   return true
 })
 
-ipcMain.handle('get-x-credentials', () => loadXCredentials())
+ipcMain.handle('get-x-credentials', () => ({ configured: xCredStore.configured() }))
 
 ipcMain.handle('set-x-credentials', (_e, key, secret) => {
-  return saveXCredentials(key, secret)
+  // partial 合并写入：留空字段保留旧值（renderer 不回显密钥后的安全写语义）
+  return xCredStore.savePartial(key, secret)
 })
 
 ipcMain.handle('fetch-news', async (_e, override = null) => {
-  const creds = loadXCredentials()
+  const creds = xCredStore.load()
   const opts = { ...newsConfig, xKey: creds.key, xSecret: creds.secret, ...(override || {}) }
   try {
     const items = await fetchAllNews(opts)
@@ -242,7 +221,7 @@ function scheduleNewsFetch() {
   const run = () => {
     const win = BrowserWindow.getAllWindows()[0]
     if (!win) return
-    const creds = loadXCredentials()
+    const creds = xCredStore.load()
     fetchAllNews({ ...newsConfig, xKey: creds.key, xSecret: creds.secret })
       .then((items) => win.webContents.send('news-auto-update', { items, time: new Date().toISOString() }))
       .catch(() => {})

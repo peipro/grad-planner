@@ -35,6 +35,7 @@ export default function SettingsView() {
   const fileRef = useRef<HTMLInputElement>(null)
   const [xKey, setXKey] = useState('')
   const [xSecret, setXSecret] = useState('')
+  const [xConfigured, setXConfigured] = useState(false)
   const toast = useToast((s) => s.show)
   const [lanInfo, setLanInfo] = useState<{ port: number | null; token: string; addresses: string[] } | null>(null)
   const [lanCopied, setLanCopied] = useState(false)
@@ -42,8 +43,9 @@ export default function SettingsView() {
   useEffect(() => {
     const api = (window as any).electronAPI
     if (api?.getXCredentials) {
-      api.getXCredentials().then((c: { key: string; secret: string }) => {
-        if (c) { setXKey(c.key || ''); setXSecret(c.secret || '') }
+      // 安全边界：密钥只存在主进程，renderer 仅能查询是否已配置（不回显密钥）
+      api.getXCredentials().then((c: { configured: boolean }) => {
+        if (c) setXConfigured(Boolean(c.configured))
       }).catch(() => {})
     }
     if (api?.lanInfo) {
@@ -394,11 +396,12 @@ export default function SettingsView() {
 
           <div style={{ fontSize: 12, color: 'var(--text-3)', marginBottom: 6 }}>
             X（推特）来源 <span style={{ color: '#f08c00' }}>· 可选，需要 API 额度</span>
+            {xConfigured && <span style={{ color: '#2f9e6e' }}> · 已配置密钥</span>}
           </div>
           <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap' }}>
             <input
               type="password"
-              placeholder="X API Key"
+              placeholder={xConfigured ? '已配置（留空保持不变）' : '输入 X API Key'}
               value={xKey}
               onChange={(e) => setXKey(e.target.value)}
               onBlur={() => saveXCred(xKey, xSecret)}
@@ -406,7 +409,7 @@ export default function SettingsView() {
             />
             <input
               type="password"
-              placeholder="X API Secret"
+              placeholder={xConfigured ? '已配置（留空保持不变）' : '输入 X API Secret'}
               value={xSecret}
               onChange={(e) => setXSecret(e.target.value)}
               onBlur={() => saveXCred(xKey, xSecret)}

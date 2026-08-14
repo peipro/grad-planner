@@ -28,6 +28,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
   syncStorageGet: () => ipcRenderer.invoke('sync-storage-get'),
   syncStorageSet: (data) => ipcRenderer.invoke('sync-storage-set', data),
   syncStorageRemove: () => ipcRenderer.invoke('sync-storage-remove'),
+  syncMutate: (mutations) => ipcRenderer.invoke('sync-mutate', mutations),
   lanPort: () => ipcRenderer.invoke('lan-port'),
   lanInfo: () => ipcRenderer.invoke('lan-info'),
   lanResetToken: () => ipcRenderer.invoke('lan-reset-token'),

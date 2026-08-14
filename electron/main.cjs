@@ -5,6 +5,7 @@ const crypto = require('crypto')
 const { fetchAllNews, fetchArticle, translateText } = require('./news.cjs')
 const { startLanServer, createStorageAccess, lanAddresses } = require('./lan-server.cjs')
 const { createSyncManager } = require('./sync-manager.cjs')
+const { createMutationEngine } = require('./mutation-engine.cjs')
 const { createBackupStore } = require('./backup-store.cjs')
 const { createCredentialsStore } = require('./credentials-store.cjs')
 const { isAllowedExternalUrl } = require('./url-security.cjs')
@@ -314,6 +315,17 @@ function ensureLanToken() {
 function startLanAccess() {
   const storageFile = path.join(app.getPath('userData'), 'sync', 'grad-planner-storage.json')
   syncStorage = createStorageAccess(storageFile)
+
+  // Phase 1B-1：Main authoritative mutation engine。
+  // IPC（sync-mutate）与 LAN（POST /api/mutations）共用同一个实例 → 单线程串行，无通道分裂。
+  const mutationEngine = createMutationEngine({ storageFile })
+  ipcMain.handle('sync-mutate', (_e, mutations) => {
+    if (!Array.isArray(mutations)) {
+      return { ok: false, error: 'invalid_mutation', detail: 'mutations 必须是数组' }
+    }
+    return mutationEngine.applyMutations(mutations)
+  })
+
   ipcMain.handle('sync-storage-get', () => syncStorage.read())
   ipcMain.handle('sync-storage-set', (_e, data) => {
     if (typeof data !== 'string') return { ok: false, error: 'invalid data' }
@@ -363,6 +375,7 @@ function startLanAccess() {
     storageFile,
     basePort,
     token: lanToken,
+    mutationEngine,
   }, (info) => {
     lanPort = info.port
     lanInstance = info.lan

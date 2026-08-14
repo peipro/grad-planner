@@ -7,21 +7,25 @@
 
 ## Phase 1 — Sync Consistency（同步一致性）
 
-本阶段（Phase 0）已确认属于 Phase 1 架构修复、**未在本阶段实施**的问题：
+### Phase 1B 已完成（不再列为待办）
 
-1. **fs.watch 800ms 自写跳过窗口**（`electron/main.cjs`）
-   - 问题：`if (Date.now() - lastDesktopWrite < 800) return` 无法区分写入来源，平板在桌面端写盘后 800ms 内的写入会被静默忽略。
-   - 建议：写入来源标记（writeSource）/ revision / deviceId。
-2. **双端并发冲突（Lost Update / Last-Write-Wins）**
-   - 现状：桌面端与平板同时修改不同对象时，后写入方整体覆盖先写入方。
-   - 建议：实体级冲突合并或版本号（revision）检测；评估 CRDT 是否必要（用户规模小，可能版本号+手动合并足够）。
-3. **reload 时未 blur 的输入缓冲丢失**（Task 1 Test C 的残余限制）
-   - 现状：`NotesView`/`TodoView` 部分编辑为 `onBlur` 写入。主进程 reload 前已 flush 进入 store 的数据，但 **reload 时正在输入、尚未 blur 的缓冲区无法被主进程捕获**（IPC 异步，beforeunload 同步发送不可靠）。
-   - 建议：reload 前 renderer 侧 flush 协议（主进程广播 before-reload → renderer 同步持久化 → 确认后 reload）；或编辑即时写入（onChange 防抖写 store）。
-4. **`sync-storage-set` IPC 不校验 JSON**（与 LAN PUT 对称的缺陷，可信通道、风险较低）
-   - 建议：与 LAN PUT 共用同一套 validate（renderer 侧可接入 `validateStorageShape`）。
-5. **uid() 使用 Math.random + Date.now**
-   - 建议：改用 `crypto.randomUUID()`（renderer 与主进程均支持）。
+- ~~reload 时未 blur 输入缓冲丢失~~ ✅ Renderer Flush Protocol（prepare-reload → 草稿提交 → 队列排空 → ACK → reload）
+- ~~fs.watch 800ms 时间窗口~~ ✅ 已移除，改为 envelope.writeId 来源判断（sync-watch.cjs）
+- ~~无设备标识~~ ✅ deviceId（desktop/tablet 持久化）
+- ~~无 revision / 旧数据静默覆盖~~ ✅ Storage Envelope + 乐观并发（expectedRevision 校验，stale → 409）
+- ~~双端修改不同实体互相覆盖~~ ✅ 最小实体级 merge（changedIds 声明 + entityVersions 判定，不同实体自动合并）
+- ~~同实体冲突静默覆盖~~ ✅ 409 + sync-conflict 事件 + toast 提示
+- ~~删除冲突静默丢失~~ ✅ deletedIds + entityVersions 冲突检测
+- ~~同步循环~~ ✅ writeId 防循环（自己的写盘跳过）
+- ~~旧数据无法迁移~~ ✅ unwrapEnvelope 兼容旧格式（revision=0）
+- ~~LAN 与 IPC 语义不一致~~ ✅ 共用 sync-merge.cjs applySubmit
+
+### Phase 1B 遗留（PARTIALLY FIXED / 后续）
+
+1. **冲突 UI 完整版**：当前为 toast 提示 + 重新加载；"保留本机/使用远程"对话框留后续（sync-conflict 事件已携带 serverData/clientData）
+2. **无刷新 hot merge**：外部写入目前仍走 reload（reload 前已过 flush 协议）；直接 merge 到 renderer 内存留后续
+3. **TodoView/其他视图输入缓冲**：NotesView 已接入 flush；TodoView 快速输入（未 Enter）与编辑表单为提交式/直接更新 store，剩余输入缓冲场景记录为已知限制
+4. **`sync-storage-set` IPC 的 data 结构校验**：applySubmit 已校验 submit 结构，entity 级校验覆盖数组字段（validateStorageShape）
 
 ## Phase 2 — 产品与知识层
 

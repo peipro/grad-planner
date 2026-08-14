@@ -67,9 +67,12 @@ function atomicWrite(file, data) {
   }
 }
 
-function createMutationEngine({ storageFile, write }) {
+function createMutationEngine({ storageFile, write, onPersisted }) {
   if (!storageFile) throw new Error('createMutationEngine: storageFile 必须提供')
   const persistWrite = typeof write === 'function' ? write : (data) => atomicWrite(storageFile, data)
+  // persist 成功回调（Phase 1B-2 State Sync）：仅在持久化成功后才调用，传入最新权威 state（partialize 后）。
+  // 职责分离：Mutation Engine 负责“改变事实”，State Sync（onPersisted）负责“传播事实”。
+  const notifyPersisted = typeof onPersisted === 'function' ? onPersisted : null
 
   // getState 读缓存：mtime+size 作为失效提示（L2：仅读优化，写路径从不依赖缓存）
   let cache = { stamp: null, text: null }
@@ -201,6 +204,8 @@ function createMutationEngine({ storageFile, write }) {
       return { ok: false, error: ERROR_CODES.PERSISTENCE_FAILURE, detail: (w && w.error) || 'write failed', results }
     }
     cache = { stamp: statStamp(), text: out }
+    // Phase 1B-2：persist 成功后才广播（禁止 persist 前广播“未来状态”）
+    if (notifyPersisted) notifyPersisted(working)
     return { ok: true, results }
   }
 

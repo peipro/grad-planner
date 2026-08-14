@@ -370,3 +370,66 @@ test('首个文件不存在 → create 正常（空权威起步）', () => {
   const st = readState(file)
   assert.strictEqual(st.notes.length, 1)
 })
+
+// ===== Phase 1B-2: onPersisted（persist 成功后才会广播 state-sync） =====
+
+test('onPersisted：persist 成功后回调，收到最新权威 state', () => {
+  const file = tmpFile()
+  const events = []
+  const engine = createMutationEngine({
+    storageFile: file,
+    onPersisted: (state) => events.push(state),
+  })
+  const r = engine.applyMutations([{ type: 'task.create', payload: makeTask('t1') }])
+  assert.strictEqual(r.ok, true)
+  assert.strictEqual(events.length, 1)
+  assert.strictEqual(events[0].tasks.length, 1)
+  assert.strictEqual(events[0].tasks[0].id, 't1')
+})
+
+test('onPersisted：batch 全部成功 → 只回调一次（最终权威 state）', () => {
+  const file = tmpFile()
+  const events = []
+  const engine = createMutationEngine({
+    storageFile: file,
+    onPersisted: (state) => events.push(state),
+  })
+  const r = engine.applyMutations([
+    { type: 'task.create', payload: makeTask('A') },
+    { type: 'task.create', payload: makeTask('B') },
+    { type: 'note.create', payload: makeNote('n1') },
+  ])
+  assert.strictEqual(r.ok, true)
+  assert.strictEqual(events.length, 1)
+  assert.deepStrictEqual(events[0].tasks.map((t) => t.id), ['A', 'B'])
+  assert.strictEqual(events[0].notes.length, 1)
+})
+
+test('onPersisted：persist 失败 → 不回调（renderer 看不到未落盘的“未来状态”）', () => {
+  const file = tmpFile()
+  let called = 0
+  const engine = createMutationEngine({
+    storageFile: file,
+    write: () => ({ ok: false, error: 'disk full' }),
+    onPersisted: () => { called += 1 },
+  })
+  const r = engine.applyMutations([{ type: 'task.create', payload: makeTask('t1') }])
+  assert.strictEqual(r.ok, false)
+  assert.strictEqual(r.error, ERROR_CODES.PERSISTENCE_FAILURE)
+  assert.strictEqual(called, 0, 'persist 失败不得广播 state-sync')
+})
+
+test('onPersisted：batch 中途失败 → 不回调', () => {
+  const file = tmpFile()
+  let called = 0
+  const engine = createMutationEngine({
+    storageFile: file,
+    onPersisted: () => { called += 1 },
+  })
+  const r = engine.applyMutations([
+    { type: 'task.create', payload: makeTask('A') },
+    { type: 'task.update', id: 'X', entity: makeTask('X') }, // entity_not_found
+  ])
+  assert.strictEqual(r.ok, false)
+  assert.strictEqual(called, 0, 'batch 未持久化不得广播')
+})

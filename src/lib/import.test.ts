@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { parseImportJson, tasksFromImport, eventsFromImport } from './import'
+import { parseImportJson, tasksFromImport, eventsFromImport, papersFromImport } from './import'
 
 describe('parseImportJson', () => {
   it('解析 papers 模块', () => {
@@ -57,5 +57,51 @@ describe('eventsFromImport', () => {
     const p = parseImportJson('{"module":"events","items":[{"title":"A","start":"2025-01-02T09:00","type":"meeting"}]}')
     const events = eventsFromImport(p)
     expect(events[0].type).toBe('meeting')
+  })
+})
+
+// ===== Task 5: 导入边界（valid / invalid / partial / empty / wrong types） =====
+
+describe('parseImportJson 边界', () => {
+  it('items 缺失 / null / 空数组 → count 0，不抛错', () => {
+    expect(parseImportJson('{"module":"papers"}').count).toBe(0)
+    expect(parseImportJson('{"module":"papers","items":null}').count).toBe(0)
+    expect(parseImportJson('{"module":"papers","items":[]}').count).toBe(0)
+  })
+
+  it('items 非数组（对象/字符串）→ count 0', () => {
+    expect(parseImportJson('{"module":"papers","items":{}}').count).toBe(0)
+    expect(parseImportJson('{"module":"papers","items":"x"}').count).toBe(0)
+  })
+
+  it('部分条目无 title 时只计有效条目', () => {
+    const p = parseImportJson('{"module":"tasks","items":[{"title":"A"},{"foo":1},{"title":""},{"title":"B"}]}')
+    expect(p.count).toBe(2)
+  })
+
+  it('高版本号仍可解析（当前无版本门控——记录为已知设计）', () => {
+    const p = parseImportJson('{"version":999,"module":"papers","items":[{"title":"A"}]}')
+    expect(p.count).toBe(1)
+  })
+})
+
+describe('wrong types 归一化', () => {
+  it('year 为字符串被丢弃为 undefined（仅接受 number）', () => {
+    const p = parseImportJson('{"module":"papers","items":[{"title":"A","year":"2024"}]}')
+    const papers = papersFromImport(p)
+    expect(papers[0].year).toBeUndefined()
+  })
+
+  it('非法 status / priority / type 归一化为安全默认值', () => {
+    const p = parseImportJson('{"module":"tasks","items":[{"title":"A","status":"explode","priority":"urgent"}]}')
+    const tasks = tasksFromImport(p)
+    expect(tasks[0].status).toBe('todo')
+    expect(tasks[0].priority).toBe('medium')
+  })
+
+  it('非法事件类型归一化为 personal', () => {
+    const p = parseImportJson('{"module":"events","items":[{"title":"A","start":"2025-01-02T09:00","type":"hack"}]}')
+    const events = eventsFromImport(p)
+    expect(events[0].type).toBe('personal')
   })
 })

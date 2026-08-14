@@ -1,0 +1,23 @@
+# ===== 依赖与构建产物 =====
+node_modules/
+dist/
+release/
+
+# ===== 运行时数据（本机便携数据目录） =====
+data/
+
+# ===== 系统/编辑器 =====
+.DS_Store
+Thumbs.db
+*.log
+.idea/
+.vscode/
+*.code-workspace
+
+# ===== 快捷方式 =====
+*.lnk
+
+# ===== 私人数据（默认不上传；如需上传请调整） =====
+docs/birthday-backup/
+docs/literature-reading-plan.json
+docs/leveldb-恢复的里程碑.json

@@ -4,6 +4,7 @@ import { RefreshCw, ExternalLink, Newspaper, Zap, Flame, Cpu, X, Loader2, BookOp
 import { useStore, uid } from '../store'
 import { NewsItem } from '../types'
 import { useToast } from '../lib/toast'
+import { isHttpUrl } from '../lib/external'
 
 type Filter = 'all' | 'ai' | 'agent' | 'official'
 
@@ -105,7 +106,7 @@ export default function NewsView() {
   const openLink = (url: string) => {
     const api = (window as any).electronAPI
     if (api?.openExternal) api.openExternal(url)
-    else window.open(url, '_blank')
+    else if (isHttpUrl(url)) window.open(url, '_blank')
   }
 
   // 英文内容自动翻译成中文（存待办/笔记时附带中文）

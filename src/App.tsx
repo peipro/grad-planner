@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react'
 import { Calendar, CheckSquare, GitBranch, FileText, Timer, BarChart2, Settings, Newspaper, Languages, Cake, Flame, Search, BookOpen } from 'lucide-react'
 import { useStore } from './store'
+import { isHttpUrl } from './lib/external'
 import CalendarView from './views/CalendarView'
 import TodoView from './views/TodoView'
 import MilestoneView from './views/MilestoneView'
@@ -125,12 +126,12 @@ export default function App() {
       const a = (e.target as HTMLElement | null)?.closest?.('a[href]') as HTMLAnchorElement | null
       if (!a) return
       const href = a.getAttribute('href') || ''
-      if (!/^https?:\/\//i.test(href)) return // 只处理 http(s) 外链
+      if (!isHttpUrl(href)) return // 非 http(s) 交给默认行为（主进程 setWindowOpenHandler 白名单兜底）
       e.preventDefault()
       e.stopPropagation()
       const api = (window as any).electronAPI
       if (api?.openExternal) api.openExternal(href)
-      else window.open(href, '_blank')
+      else if (isHttpUrl(href)) window.open(href, '_blank')
     }
     document.addEventListener('click', onClick, true)
     return () => document.removeEventListener('click', onClick, true)

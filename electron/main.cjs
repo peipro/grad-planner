@@ -7,6 +7,7 @@ const { startLanServer, createStorageAccess, lanAddresses } = require('./lan-ser
 const { createSyncManager } = require('./sync-manager.cjs')
 const { createBackupStore } = require('./backup-store.cjs')
 const { createCredentialsStore } = require('./credentials-store.cjs')
+const { isAllowedExternalUrl } = require('./url-security.cjs')
 
 const isDev = !app.isPackaged
 
@@ -47,7 +48,8 @@ function createWindow() {
   }
 
   win.webContents.setWindowOpenHandler(({ url }) => {
-    shell.openExternal(url)
+    // 协议白名单：仅 http/https 允许打开（file:/javascript:/data: 等一律拒绝）
+    if (isAllowedExternalUrl(url)) shell.openExternal(url)
     return { action: 'deny' }
   })
 
@@ -89,7 +91,7 @@ function createTranslateWindow() {
 
   translateWin.on('closed', () => { translateWin = null })
   translateWin.webContents.setWindowOpenHandler(({ url }) => {
-    shell.openExternal(url)
+    if (isAllowedExternalUrl(url)) shell.openExternal(url)
     return { action: 'deny' }
   })
   translateWin.once('ready-to-show', () => translateWin.show())
@@ -372,8 +374,9 @@ ipcMain.handle('lan-reset-token', () => {
 })
 
 // 在系统默认浏览器中打开外链（应用内部不跳转网页）
+// 协议白名单与 setWindowOpenHandler 一致：仅 http/https
 ipcMain.handle('open-external', (_e, url) => {
-  if (typeof url === 'string' && /^https?:\/\//i.test(url)) shell.openExternal(url)
+  if (isAllowedExternalUrl(url)) shell.openExternal(url)
   return true
 })
 

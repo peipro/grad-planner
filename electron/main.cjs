@@ -1,4 +1,4 @@
-const { app, BrowserWindow, globalShortcut, ipcMain, shell, clipboard, Notification, safeStorage } = require('electron')
+const { app, BrowserWindow, globalShortcut, ipcMain, shell, clipboard, Notification, safeStorage, session } = require('electron')
 const path = require('path')
 const fs = require('fs')
 const crypto = require('crypto')
@@ -8,6 +8,7 @@ const { createSyncManager } = require('./sync-manager.cjs')
 const { createBackupStore } = require('./backup-store.cjs')
 const { createCredentialsStore } = require('./credentials-store.cjs')
 const { isAllowedExternalUrl } = require('./url-security.cjs')
+const { CSP } = require('./csp.cjs')
 
 const isDev = !app.isPackaged
 
@@ -38,6 +39,7 @@ function createWindow() {
       preload: path.join(__dirname, 'preload.js'),
       contextIsolation: true,
       nodeIntegration: false,
+      sandbox: true, // 渲染进程沙箱：preload 仅用 contextBridge/ipcRenderer，兼容
     },
   })
 
@@ -80,6 +82,7 @@ function createTranslateWindow() {
       preload: path.join(__dirname, 'preload.js'),
       contextIsolation: true,
       nodeIntegration: false,
+      sandbox: true,
     },
   })
 
@@ -381,6 +384,18 @@ ipcMain.handle('open-external', (_e, url) => {
 })
 
 app.whenReady().then(() => {
+  // CSP 纵深防御：生产模式注入响应头（与构建注入的 HTML meta 一致，双保险）
+  if (!isDev) {
+    session.defaultSession.webRequest.onHeadersReceived((details, callback) => {
+      callback({
+        responseHeaders: {
+          ...details.responseHeaders,
+          'Content-Security-Policy': [CSP],
+        },
+      })
+    })
+  }
+
   createWindow()
   registerGlobalShortcut()
   scheduleNewsFetch()

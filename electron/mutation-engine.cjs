@@ -122,17 +122,37 @@ const ENTITY_CONFIG = {
 }
 
 // 跨实体事务（权威侧原子执行，防 renderer 过期快照覆盖）：
-//   project.delete  → tasks/milestones.projectId 置 undefined
+//   project.delete  → tasks/milestones.projectId 置 undefined；papers/notes.projectIds 移除
 //   paperStage.delete → papers.stage 重设为 '未分类'
+//   paper.delete    → notes/paperIds、projects/paperIds 移除（Phase 2A：删除 Paper 不删 Note）
+//   note.delete     → papers/noteIds、projects/noteIds 移除（Phase 2A：删除 Note 不影响 Paper/Project）
 const CROSS_ENTITY = {
   project: {
+    field: 'projects',
     refs: [
       { field: 'tasks', refKey: 'projectId', apply: (e) => ({ ...e, projectId: undefined }) },
       { field: 'milestones', refKey: 'projectId', apply: (e) => ({ ...e, projectId: undefined }) },
+      { field: 'papers', refKey: 'projectIds', array: true },
+      { field: 'notes', refKey: 'projectIds', array: true },
     ],
   },
   paperStage: {
+    field: 'paperStages',
     refs: [{ field: 'papers', refKey: 'stage', apply: () => ({ stage: '未分类' }) }],
+  },
+  paper: {
+    field: 'papers',
+    refs: [
+      { field: 'notes', refKey: 'paperIds', array: true },
+      { field: 'projects', refKey: 'paperIds', array: true },
+    ],
+  },
+  note: {
+    field: 'notes',
+    refs: [
+      { field: 'papers', refKey: 'noteIds', array: true },
+      { field: 'projects', refKey: 'noteIds', array: true },
+    ],
   },
 }
 
@@ -260,13 +280,29 @@ function createMutationEngine({ storageFile, write, onPersisted }) {
     const tx = CROSS_ENTITY[kind]
     if (tx && op === 'delete') {
       if (!isNonEmptyString(m.id)) return { ok: false, error: ERROR_CODES.INVALID_MUTATION, detail: 'delete 缺少合法 id' }
-      const field = kind === 'project' ? 'projects' : 'paperStages'
+      const field = tx.field || 'projects'
       const arr = ensureArray(state, field)
-      const idx = arr.findIndex((e) => (kind === 'project' ? e && e.id === m.id : e === m.id))
+      const idx = arr.findIndex((e) => (field === 'paperStages' ? e === m.id : e && e.id === m.id))
+      // Phase 1B-3B：删除版本检查（跨实体事务删除同样生效）——旧版本 delete 不得删除新版本实体
+      if (idx >= 0 && field !== 'paperStages') {
+        const actualVersion = entityVersion(arr[idx])
+        const baseVersion = mutationBaseVersion(m)
+        if (baseVersion !== null && baseVersion !== actualVersion) {
+          return conflictResult(kind, m.id, baseVersion, actualVersion, arr[idx])
+        }
+      }
       if (idx >= 0) arr.splice(idx, 1)
       for (const ref of tx.refs) {
         if (!Array.isArray(state[ref.field])) continue
-        state[ref.field] = state[ref.field].map((e) => (e && e[ref.refKey] === m.id ? { ...e, ...ref.apply(e, m.id) } : e))
+        state[ref.field] = state[ref.field].map((e) => {
+          if (!e) return e
+          if (ref.array) {
+            // 数组引用（Phase 2A）：从关系数组移除被删 id
+            if (!Array.isArray(e[ref.refKey]) || !e[ref.refKey].includes(m.id)) return e
+            return { ...e, [ref.refKey]: e[ref.refKey].filter((x) => x !== m.id) }
+          }
+          return e[ref.refKey] === m.id ? { ...e, ...ref.apply(e, m.id) } : e
+        })
       }
       return { ok: true, type: m.type, id: m.id, entity: null, deleted: idx >= 0, transactional: true }
     }

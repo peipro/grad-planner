@@ -9,6 +9,9 @@ export interface Project {
   name: string
   color: string
   version?: number
+  // Phase 2A：研究关系
+  paperIds?: string[]
+  noteIds?: string[]
 }
 
 interface NewsConfig {

@@ -58,6 +58,9 @@ export interface Note {
   createdAt: string
   updatedAt: string
   version?: number
+  // Phase 2A：研究关系
+  paperIds?: string[]
+  projectIds?: string[]
 }
 
 export interface PomodoroRecord {
@@ -117,6 +120,9 @@ export interface Paper {
   focus?: 'core' | 'skim'
   createdAt: string
   version?: number
+  // Phase 2A：研究关系（双向 ID 引用）
+  projectIds?: string[]
+  noteIds?: string[]
 }
 
 export interface NewsItem {

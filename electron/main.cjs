@@ -26,6 +26,17 @@ if (app.isPackaged) {
 
 let translateWin = null
 
+// 同窗口导航防护：仅允许自身应用 URL，外链 http(s) 转系统浏览器，其余一律拒绝
+// 防 XSS 后导航到 file:// 或恶意页面（导航后 preload 仍会注入）
+function guardNavigation(win) {
+  win.webContents.on('will-navigate', (event, url) => {
+    const allowed = isDev ? url.startsWith('http://localhost:5173') : url.startsWith('file://')
+    if (allowed) return
+    event.preventDefault()
+    if (isAllowedExternalUrl(url)) shell.openExternal(url)
+  })
+}
+
 function createWindow() {
   const win = new BrowserWindow({
     width: 1280,
@@ -49,6 +60,7 @@ function createWindow() {
     win.loadFile(path.join(__dirname, '../dist/index.html'))
   }
 
+  guardNavigation(win)
   win.webContents.setWindowOpenHandler(({ url }) => {
     // 协议白名单：仅 http/https 允许打开（file:/javascript:/data: 等一律拒绝）
     if (isAllowedExternalUrl(url)) shell.openExternal(url)
@@ -93,6 +105,7 @@ function createTranslateWindow() {
   }
 
   translateWin.on('closed', () => { translateWin = null })
+  guardNavigation(translateWin)
   translateWin.webContents.setWindowOpenHandler(({ url }) => {
     if (isAllowedExternalUrl(url)) shell.openExternal(url)
     return { action: 'deny' }
@@ -158,9 +171,14 @@ function registerGlobalShortcut() {
 }
 
 // 剪贴板读取
-ipcMain.handle('read-clipboard', () => {
+// 权限边界：仅翻译小窗 webContents 可调用（主窗无此功能需求）
+// 防 renderer 被 XSS 后窃取剪贴板中的敏感内容（密码/复制的文本）
+ipcMain.handle('read-clipboard', (e) => {
+  if (!translateWin || translateWin.isDestroyed() || e.sender !== translateWin.webContents) {
+    return { ok: false, error: 'permission denied' }
+  }
   try { return { ok: true, text: clipboard.readText() } }
-  catch (e) { return { ok: false, error: String(e && e.message ? e.message : e) } }
+  catch (err) { return { ok: false, error: String(err && err.message ? err.message : err) } }
 })
 
 // 自动备份目录处理（打包后存储数据到用户目录）

@@ -51,7 +51,13 @@
 ## 已知但本阶段未处理的低风险项
 
 - `lan-access.log` 无限增长（无轮转）。
-- `read-clipboard` IPC 无用户手势约束。
-- News 模块 SSRF（`fetchArticle` 无协议/内网校验）——属于安全 Phase（Phase 0 范围外，见审计报告 P1#3）。
-- 无 CSP / `setWindowOpenHandler` 无协议白名单——安全 Phase。
-- X 密钥明文回传 renderer——安全 Phase。
+
+## 安全项状态（Phase 1A 已完成，不再列为待办）
+
+- ~~News 模块 SSRF~~ ✅ 已修复（url-security.cjs + news.cjs 全入口校验）
+- ~~无 CSP / `setWindowOpenHandler` 无协议白名单~~ ✅ 已修复（CSP 单一来源 + isAllowedExternalUrl）
+- ~~X 密钥明文回传 renderer~~ ✅ 已修复（get-x-credentials 仅返回 configured）
+- ~~LAN 写请求 CSRF~~ ✅ 已修复（Origin 校验）
+- ~~read-clipboard 无权限边界~~ ✅ 已修复（仅翻译小窗可调用）
+- ~~同窗口导航无防护~~ ✅ 已修复（will-navigate 守卫）
+- ~~Electron sandbox 未开启~~ ✅ 已开启（preload 仅 contextBridge/ipcRenderer，兼容）

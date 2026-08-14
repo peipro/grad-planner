@@ -2,6 +2,10 @@ const https = require('https')
 const http = require('http')
 const net = require('net')
 const { XMLParser } = require('fast-xml-parser')
+const { validateExternalUrl } = require('./url-security.cjs')
+
+// 响应体大小上限：避免无限读取网络响应（SSRF/DoS 防护）
+const MAX_RESPONSE_BODY = 2 * 1024 * 1024 // 2MB
 
 // 代理配置（X API 与国外源需要代理访问）
 // 自动探测常见 Clash 代理端口（端口可能随配置变化，如 7897 / 7890 等）
@@ -65,7 +69,10 @@ const RSS_SOURCES = [
 ]
 
 // ============ 代理隧道请求（CONNECT） ============
-async function proxiedRequest(url, timeout = 15000, redirects = 0) {
+async function proxiedRequest(url, timeout = 15000, redirects = 0, maxBytes = MAX_RESPONSE_BODY) {
+  // SSRF 防护：发起前校验协议/IP/DNS；每次 redirect 递归时重新校验
+  const v = await validateExternalUrl(url)
+  if (!v.ok) return Promise.reject(new Error(`URL 校验失败: ${v.error}`))
   await probeProxy()
   return new Promise((resolve, reject) => {
     const mod = url.startsWith('https') ? https : http
@@ -98,12 +105,24 @@ async function proxiedRequest(url, timeout = 15000, redirects = 0) {
         agent: false,
       }, (resp) => {
         let data = ''
+        let tooLarge = false
         resp.setEncoding('utf-8')
-        resp.on('data', (c) => (data += c))
+        resp.on('data', (c) => {
+          if (tooLarge) return
+          data += c
+          if (data.length > maxBytes) {
+            tooLarge = true
+            socket.destroy()
+            req.destroy()
+            reject(new Error('Response too large'))
+          }
+        })
         resp.on('end', () => {
+          if (tooLarge) return
           if (resp.statusCode >= 300 && resp.statusCode < 400 && resp.headers.location) {
             if (redirects >= 5) { reject(new Error('Too many redirects')); return }
-            proxiedRequest(new URL(resp.headers.location, url).href, timeout, redirects + 1).then(resolve).catch(reject)
+            // redirect 目标重新过 URL 校验（proxiedRequest 递归入口会重新 validate）
+            proxiedRequest(new URL(resp.headers.location, url).href, timeout, redirects + 1, maxBytes).then(resolve).catch(reject)
             return
           }
           if (resp.statusCode !== 200) {
@@ -122,13 +141,17 @@ async function proxiedRequest(url, timeout = 15000, redirects = 0) {
 }
 
 // ============ HTTP 请求工具（支持直连/代理回退） ============
-function fetchUrl(url, timeout = 12000, viaProxy = false, redirects = 0) {
+async function fetchUrl(url, timeout = 12000, viaProxy = false, redirects = 0, maxBytes = MAX_RESPONSE_BODY) {
+  // SSRF 防护：发起前校验协议/IP/DNS（每次 redirect 递归都会重新校验）
+  const v = await validateExternalUrl(url)
+  if (!v.ok) return Promise.reject(new Error(`URL 校验失败: ${v.error}`))
+
   const attemptDirect = () => new Promise((resolve, reject) => {
     const mod = url.startsWith('https') ? https : http
     const req = mod.get(url, { headers: { 'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64)' } }, (res) => {
       if (res.statusCode >= 300 && res.statusCode < 400 && res.headers.location) {
         if (redirects >= 5) { reject(new Error('Too many redirects')); res.resume(); return }
-        fetchUrl(new URL(res.headers.location, url).href, timeout, viaProxy, redirects + 1).then(resolve).catch(reject)
+        fetchUrl(new URL(res.headers.location, url).href, timeout, viaProxy, redirects + 1, maxBytes).then(resolve).catch(reject)
         res.resume()
         return
       }
@@ -138,17 +161,29 @@ function fetchUrl(url, timeout = 12000, viaProxy = false, redirects = 0) {
         return
       }
       let data = ''
+      let tooLarge = false
       res.setEncoding('utf-8')
-      res.on('data', (chunk) => (data += chunk))
-      res.on('end', () => resolve(data))
+      res.on('data', (chunk) => {
+        if (tooLarge) return
+        data += chunk
+        if (data.length > maxBytes) {
+          tooLarge = true
+          req.destroy()
+          res.destroy()
+          reject(new Error('Response too large'))
+        }
+      })
+      res.on('end', () => {
+        if (!tooLarge) resolve(data)
+      })
     })
     req.on('error', reject)
     req.setTimeout(timeout, () => req.destroy(new Error('Timeout')))
   })
 
-  if (viaProxy) return proxiedRequest(url, timeout)
+  if (viaProxy) return proxiedRequest(url, timeout, 0, maxBytes)
   // 直连失败时回退代理
-  return attemptDirect().catch(() => proxiedRequest(url, timeout))
+  return attemptDirect().catch(() => proxiedRequest(url, timeout, 0, maxBytes))
 }
 
 // ============ RSS 解析 ============
@@ -270,6 +305,9 @@ function encodeBasic(key, secret) {
 
 // 经 HTTP 代理建立 CONNECT 隧道后，发起 HTTPS 请求
 async function proxiedHttpsRequest({ method = 'GET', hostname, path, headers = {}, body }, timeout = 15000) {
+  // SSRF 防护：目标主机必须通过外部 URL 校验（X API 等可信主机，纵深防御）
+  const v = await validateExternalUrl(`https://${hostname}/`)
+  if (!v.ok) return Promise.reject(new Error(`URL 校验失败: ${v.error}`))
   await probeProxy()
   return new Promise((resolve, reject) => {
     const [host, port] = proxyAddr.split(':')
@@ -502,6 +540,9 @@ function extractArticleText(html) {
 
 async function fetchArticle(url) {
   try {
+    // SSRF 纵深防御：renderer 直接入口（RSS item.link 外部可控）显式校验
+    const v = await validateExternalUrl(url)
+    if (!v.ok) return { ok: false, error: `URL 校验失败: ${v.error}` }
     const html = await fetchUrl(url, 15000)
     const text = extractArticleText(html)
     if (!text) return { ok: false, error: '未能提取到正文内容' }

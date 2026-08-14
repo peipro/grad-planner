@@ -201,6 +201,69 @@ describe('sync-adapter mutation（真实 {state, version} payload）', () => {
       { type: 'task.update', id: 't1', entity: makeTask('t1', { title: 'v2' }) },
     ])
   })
+
+  // ===== Phase 1B-3A：通用实体 diff =====
+
+  it('event 变更 → event.create / update / delete（真实 payload）', async () => {
+    const ev = (id: string, o: Record<string, unknown> = {}) => ({ id, title: `Event ${id}`, start: 'x', end: 'y', type: 'meeting' as const, ...o })
+    // create
+    window.localStorage.setItem(SYNC_KEY, persistStr({ events: [ev('e1')], pomo: {} }))
+    await flushAndWait()
+    expect(mockCalls[0]).toEqual([{ type: 'event.create', payload: ev('e1') }])
+    mockCalls.length = 0
+    // update
+    ;(window as any).electronAPI.syncStorageGet = async () => ({
+      found: true, data: persistStr({ events: [ev('e1')], pomo: {} }),
+    })
+    await window.localStorage.getItem(SYNC_KEY)
+    mockCalls.length = 0
+    window.localStorage.setItem(SYNC_KEY, persistStr({ events: [ev('e1', { title: 'E1 改了' })], pomo: {} }))
+    await flushAndWait()
+    expect(mockCalls[0]).toEqual([{ type: 'event.update', id: 'e1', entity: ev('e1', { title: 'E1 改了' }) }])
+    mockCalls.length = 0
+    // delete
+    window.localStorage.setItem(SYNC_KEY, persistStr({ events: [], pomo: {} }))
+    await flushAndWait()
+    expect(mockCalls[0]).toEqual([{ type: 'event.delete', id: 'e1' }])
+  })
+
+  it('project 变更 → project.create；含关联 task 的 project.delete → project.delete + task.update（engine 侧事务保护）', async () => {
+    const proj = (id: string) => ({ id, name: `Project ${id}`, color: 'blue' })
+    const task = (id: string, projectId: string | undefined) => ({ id, title: `Task ${id}`, priority: 'medium', status: 'todo', createdAt: 'x', ...(projectId ? { projectId } : {}) })
+    // 权威：project p1 + task t1（属于 p1）
+    ;(window as any).electronAPI.syncStorageGet = async () => ({
+      found: true, data: persistStr({ projects: [proj('p1')], tasks: [task('t1', 'p1')], pomo: {} }),
+    })
+    await window.localStorage.getItem(SYNC_KEY)
+    mockCalls.length = 0
+    // renderer 删除 project（store deleteProject 联动 tasks.projectId 清空）
+    window.localStorage.setItem(SYNC_KEY, persistStr({ projects: [], tasks: [task('t1', undefined)], pomo: {} }))
+    await flushAndWait()
+    // diff 生成 project.delete + task.update（task 仅 projectId 变化）
+    // engine 预扫描 project.delete → 该 task 的过期 update 被跳过（权威侧解引用）
+    expect(mockCalls[0]).toEqual([
+      { type: 'task.update', id: 't1', entity: task('t1', undefined) },
+      { type: 'project.delete', id: 'p1' },
+    ])
+  })
+
+  it('paperStages 变化 → paperStages.replace（整组）', async () => {
+    window.localStorage.setItem(SYNC_KEY, persistStr({ paperStages: ['阶段0', '阶段1'], pomo: {} }))
+    await flushAndWait()
+    expect(mockCalls[0]).toEqual([{ type: 'paperStages.replace', payload: ['阶段0', '阶段1'] }])
+  })
+
+  it('多实体同时变化 → 一个 batch 提交所有 mutation', async () => {
+    const ev = { id: 'e1', title: 'E1', start: 'x', end: 'y', type: 'meeting' as const }
+    const hab = { id: 'h1', name: 'H1', emoji: 'e', weeklyTarget: 3, records: [] as string[], createdAt: 'x' }
+    window.localStorage.setItem(SYNC_KEY, persistStr({ events: [ev], habits: [hab], pomo: {} }))
+    await flushAndWait()
+    expect(mockCalls).toHaveLength(1)
+    expect(mockCalls[0]).toEqual([
+      { type: 'event.create', payload: ev },
+      { type: 'habit.create', payload: hab },
+    ])
+  })
 })
 
 describe('mutation 失败分类（L4：不搞一刀切 refresh）', () => {
@@ -304,7 +367,7 @@ describe('mergeAuthoritativeState（区分 authoritative 与 renderer-only）', 
 describe('applyAuthoritativeState（state-sync 应用路径）', () => {
   it('应用权威 state 到 store（等价 Test A：Main mutation → state-sync → renderer 更新）', () => {
     useStore.setState({ tasks: [], notes: [] } as any)
-    applyAuthoritativeState({ tasks: [makeTask('synced', { title: '从主进程同步' })], notes: [] })
+    applyAuthoritativeState({ tasks: [makeTask('synced', { title: '从主进程同步' })], notes: [], paperStages: [] })
     const st = useStore.getState()
     expect(st.tasks.length).toBe(1)
     expect(st.tasks[0].title).toBe('从主进程同步')
@@ -314,7 +377,7 @@ describe('applyAuthoritativeState（state-sync 应用路径）', () => {
     // 准备：sync-adapter 已加载（beforeEach），mock syncMutate 记录调用
     useStore.setState({ tasks: [], notes: [] } as any)
     // 模拟 Main 广播权威 state（含 task t1）
-    applyAuthoritativeState({ tasks: [makeTask('t1')], notes: [] })
+    applyAuthoritativeState({ tasks: [makeTask('t1')], notes: [], paperStages: [] })
     // applyAuthoritativeState → setState → persist setItem → sync-adapter diff（基准已被标记）→ 不应提交
     expect(mockCalls).toHaveLength(0)
     // 稍等（模拟节流窗口）仍无提交
@@ -326,7 +389,7 @@ describe('applyAuthoritativeState（state-sync 应用路径）', () => {
 
   it('state-sync 应用后，用户新操作仍能正常提交（diff 基准正确）', async () => {
     useStore.setState({ tasks: [], notes: [] } as any)
-    applyAuthoritativeState({ tasks: [makeTask('t1')], notes: [] })
+    applyAuthoritativeState({ tasks: [makeTask('t1')], notes: [], paperStages: [] })
     expect(mockCalls).toHaveLength(0)
     // 用户新增 task t2 → 应提交 create t2（不含 t1，避免重复 create）
     const cur = useStore.getState()

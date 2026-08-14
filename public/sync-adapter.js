@@ -52,17 +52,26 @@
     return null
   }
 
-  // diff：base vs next → Mutation[]（只关注 tasks / notes 两个实体）
+  // ===== Phase 1B-3A：全部对象实体字段（与 electron/mutation-engine.cjs ENTITY_CONFIG 对齐） =====
+  var ENTITY_FIELDS = [
+    { field: 'events', kind: 'event' },
+    { field: 'tasks', kind: 'task' },
+    { field: 'milestones', kind: 'milestone' },
+    { field: 'notes', kind: 'note' },
+    { field: 'pomodoros', kind: 'pomodoro' },
+    { field: 'birthdays', kind: 'birthday' },
+    { field: 'habits', kind: 'habit' },
+    { field: 'projects', kind: 'project' },
+    { field: 'papers', kind: 'paper' },
+  ]
+
+  // diff：base vs next → Mutation[]（表驱动覆盖全部对象实体 + paperStages）
   // create / update（全量 entity）/ delete，与 electron/mutation-engine.cjs 的契约一致。
   function diffMutations(base, next) {
     var out = []
-    var fields = [
-      { field: 'tasks', kind: 'task' },
-      { field: 'notes', kind: 'note' },
-    ]
-    for (var f = 0; f < fields.length; f++) {
-      var field = fields[f].field
-      var kind = fields[f].kind
+    for (var f = 0; f < ENTITY_FIELDS.length; f++) {
+      var field = ENTITY_FIELDS[f].field
+      var kind = ENTITY_FIELDS[f].kind
       var prev = {}
       var nextMap = {}
       var prevArr = base && Array.isArray(base[field]) ? base[field] : []
@@ -82,6 +91,12 @@
       for (var id2 in prev) {
         if (!(id2 in nextMap)) out.push({ type: kind + '.delete', id: id2 })
       }
+    }
+    // paperStages：字符串数组（无 id），内容变化 → 整组 replace
+    var prevStages = base && Array.isArray(base.paperStages) ? base.paperStages : []
+    var nextStages = next && Array.isArray(next.paperStages) ? next.paperStages : []
+    if (JSON.stringify(prevStages) !== JSON.stringify(nextStages)) {
+      out.push({ type: 'paperStages.replace', payload: nextStages })
     }
     return out
   }

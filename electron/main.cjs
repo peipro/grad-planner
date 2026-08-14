@@ -301,24 +301,13 @@ function storageHashOf(file) {
 
 // 写入节流 + reload 前强制落盘（旧 sync-storage-set 路径保留，兼容旧客户端）
 // 见 electron/sync-manager.cjs 的时序语义与测试
+// Phase 1B-2：外部变化不再走 reload（改为 state-sync 广播），reload 回调传空函数
 const syncManager = createSyncManager({
   write: (data) => {
     try { syncStorage && syncStorage.write(data) } catch (e) { console.error('[sync] flush write failed:', e) }
   },
-  reload: reloadRenderers,
+  reload: () => {},
 })
-
-function reloadRenderers() {
-  for (const win of BrowserWindow.getAllWindows()) {
-    if (!win.isDestroyed()) {
-      try {
-        // 翻译小窗不参与数据刷新
-        if (String(win.webContents.getURL()).includes('translate.html')) continue
-        win.webContents.reload()
-      } catch {}
-    }
-  }
-}
 
 // 生成或读取局域网访问 token（首次启动随机生成并持久化）
 function ensureLanToken() {

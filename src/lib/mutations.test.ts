@@ -3,10 +3,10 @@
 // 本测试全部使用真实 zustand persist 格式：JSON.stringify({ state, version: 0 })。
 // sync-adapter 用 new Function 加载（与生产 <script> 加载一致，防止 vite 转换破坏 IIFE 语义）。
 
-import { describe, it, expect, vi, beforeEach } from 'vitest'
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 import { readFileSync } from 'node:fs'
 import { useStore } from '../store'
-import { refreshFromAuthority, REFRESH_ON_ERROR } from './mutations'
+import { refreshFromAuthority, REFRESH_ON_ERROR, mergeAuthoritativeState, applyAuthoritativeState } from './mutations'
 
 const SYNC_KEY = 'grad-planner-storage'
 
@@ -79,6 +79,13 @@ beforeEach(async () => {
   // hydration：建立权威 baseState
   await window.localStorage.getItem(SYNC_KEY)
   mockCalls.length = 0
+})
+
+afterEach(async () => {
+  // 排空上一测试可能遗留的 sync-adapter 节流 timer（旧实例闭包跨测试无法直接清除）：
+  // 触发 flush + 等待一个节流周期，避免旧实例异步提交污染下一测试的 mockCalls
+  window.dispatchEvent(new Event('pagehide'))
+  await new Promise((r) => setTimeout(r, 320))
 })
 
 describe('sync-adapter mutation（真实 {state, version} payload）', () => {
@@ -245,3 +252,91 @@ describe('refreshFromAuthority', () => {
     expect(useStore.getState().tasks.map((t) => t.id)).toEqual(['keep'])
   })
 })
+
+// ===== Phase 1B-2: State Sync（Main → Renderer 就地更新） =====
+
+describe('mergeAuthoritativeState（区分 authoritative 与 renderer-only）', () => {
+  it('authoritative 实体字段覆盖 current；renderer-only 字段保留（§14）', () => {
+    useStore.setState({
+      tasks: [makeTask('old')],
+      notes: [makeNote('n1', { title: '本地草稿相关' })],
+      activeView: 'notes',
+      pomo: { mode: 'countdown', focusMin: 25, breakMin: 5, remaining: 900, running: true, phase: 'focus', taskTitle: 'x', swSec: 12, swRunning: true, endAt: 9999 },
+      newsConfig: { xKey: 'secret-in-memory', xSecret: 's', includeX: false, rssKeys: null, includeHot: true },
+    } as any)
+    const authority = {
+      tasks: [makeTask('server', { title: '权威任务' })],
+      notes: [makeNote('n1', { title: '服务端 Note' })],
+      activeView: 'todo',
+      pomo: { mode: 'stopwatch', focusMin: 50, remaining: 42, running: false },
+      newsConfig: { xKey: '', xSecret: '', includeX: true, rssKeys: ['x'], includeHot: false },
+    }
+    const merged = mergeAuthoritativeState(authority, useStore.getState())
+    // 实体字段来自权威
+    expect(merged.tasks.map((t) => t.id)).toEqual(['server'])
+    expect(merged.notes[0].title).toBe('服务端 Note')
+    // renderer-only 保留
+    expect(merged.activeView).toBe('notes')
+    expect(merged.pomo.running).toBe(true)          // 番茄钟运行不被打断
+    expect(merged.pomo.remaining).toBe(900)
+    expect(merged.pomo.swSec).toBe(12)
+    expect(merged.newsConfig.xKey).toBe('secret-in-memory') // 内存密钥不被清
+  })
+
+  it('配置字段（theme/reminders）来自权威', () => {
+    useStore.setState({ theme: { mode: 'light', accent: 'blue' } } as any)
+    const merged = mergeAuthoritativeState({ theme: { mode: 'dark', accent: 'green' } }, useStore.getState())
+    expect(merged.theme).toEqual({ mode: 'dark', accent: 'green' })
+  })
+
+  it('milestones 自愈（与 persist merge 同语义）', () => {
+    const merged = mergeAuthoritativeState({ milestones: [{ title: 'm1' }] }, useStore.getState())
+    expect(merged.milestones.length).toBe(1)
+    expect(typeof merged.milestones[0].id).toBe('string')
+  })
+})
+
+describe('applyAuthoritativeState（state-sync 应用路径）', () => {
+  it('应用权威 state 到 store（等价 Test A：Main mutation → state-sync → renderer 更新）', () => {
+    useStore.setState({ tasks: [], notes: [] } as any)
+    applyAuthoritativeState({ tasks: [makeTask('synced', { title: '从主进程同步' })], notes: [] })
+    const st = useStore.getState()
+    expect(st.tasks.length).toBe(1)
+    expect(st.tasks[0].title).toBe('从主进程同步')
+  })
+
+  it('防循环（Test F）：state-sync 应用后 persist 不产生 mutation 提交', async () => {
+    // 准备：sync-adapter 已加载（beforeEach），mock syncMutate 记录调用
+    useStore.setState({ tasks: [], notes: [] } as any)
+    // 模拟 Main 广播权威 state（含 task t1）
+    applyAuthoritativeState({ tasks: [makeTask('t1')], notes: [] })
+    // applyAuthoritativeState → setState → persist setItem → sync-adapter diff（基准已被标记）→ 不应提交
+    expect(mockCalls).toHaveLength(0)
+    // 稍等（模拟节流窗口）仍无提交
+    await new Promise((r) => setTimeout(r, 20))
+    expect(mockCalls).toHaveLength(0)
+    // 但 store 已更新（用户看到了新数据）
+    expect(useStore.getState().tasks.length).toBe(1)
+  })
+
+  it('state-sync 应用后，用户新操作仍能正常提交（diff 基准正确）', async () => {
+    useStore.setState({ tasks: [], notes: [] } as any)
+    applyAuthoritativeState({ tasks: [makeTask('t1')], notes: [] })
+    expect(mockCalls).toHaveLength(0)
+    // 用户新增 task t2 → 应提交 create t2（不含 t1，避免重复 create）
+    const cur = useStore.getState()
+    useStore.setState({ tasks: [...cur.tasks, makeTask('t2')] } as any) // 触发 persist setItem
+    window.dispatchEvent(new Event('pagehide'))
+    await vi.waitFor(() => { expect(mockCalls.length).toBeGreaterThanOrEqual(1) })
+    const ids = mockCalls[0].mutations.map((m: any) => m.id || (m.payload && m.payload.id))
+    expect(ids).toEqual(['t2']) // 只提交新变化，不重放权威数据
+  })
+
+  it('非法 state 输入 → 忽略（不破坏 store）', () => {
+    useStore.setState({ tasks: [makeTask('keep')] } as any)
+    applyAuthoritativeState(null as any)
+    applyAuthoritativeState('nope' as any)
+    expect(useStore.getState().tasks.length).toBe(1)
+  })
+})
+

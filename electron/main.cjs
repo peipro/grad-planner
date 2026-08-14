@@ -4,6 +4,8 @@ const fs = require('fs')
 const crypto = require('crypto')
 const { fetchAllNews, fetchArticle, translateText } = require('./news.cjs')
 const { startLanServer, createStorageAccess, lanAddresses } = require('./lan-server.cjs')
+const { createSyncManager } = require('./sync-manager.cjs')
+const { createBackupStore } = require('./backup-store.cjs')
 
 const isDev = !app.isPackaged
 
@@ -162,48 +164,13 @@ function ensureDataDir() {
   return dir
 }
 
+// 备份存储：唯一临时文件 + 原子写 + 保留最近 14 份（修复同日覆盖 / tmp 固定名冲突）
+const backupStore = createBackupStore(path.join(app.getPath('userData'), 'backups'))
+
 ipcMain.handle('backup-dir', () => ensureDataDir())
-ipcMain.handle('save-backup', (_e, json) => {
-  const dir = ensureDataDir()
-  const file = path.join(dir, `backup-${new Date().toISOString().slice(0, 10)}.json`)
-  // 原子写：先写临时文件再重命名，避免中途断电/崩溃损坏备份文件
-  const tmp = `${file}.tmp`
-  try {
-    fs.writeFileSync(tmp, json, 'utf-8')
-    fs.renameSync(tmp, file)
-  } catch (e) {
-    try { fs.unlinkSync(tmp) } catch {}
-    throw e
-  }
-  // 清理：仅保留最近 14 天的备份
-  try {
-    const files = fs.readdirSync(dir).filter((f) => f.startsWith('backup-') && f.endsWith('.json'))
-    files.sort().reverse()
-    files.slice(14).forEach((f) => {
-      try { fs.unlinkSync(path.join(dir, f)) } catch {}
-    })
-  } catch {}
-  return file
-})
-ipcMain.handle('list-backups', () => {
-  const dir = ensureDataDir()
-  try {
-    return fs.readdirSync(dir)
-      .filter((f) => f.startsWith('backup-') && f.endsWith('.json'))
-      .map((f) => {
-        const p = path.join(dir, f)
-        const st = fs.statSync(p)
-        return { name: f, size: st.size, mtime: st.mtime.toISOString() }
-      })
-      .sort((a, b) => b.name.localeCompare(a.name))
-  } catch { return [] }
-})
-ipcMain.handle('load-backup', (_e, name) => {
-  const dir = ensureDataDir()
-  const file = path.join(dir, String(name))
-  if (!file.startsWith(dir) || !/^backup-[\d-]+\.json$/.test(String(name))) return null
-  try { return fs.readFileSync(file, 'utf-8') } catch { return null }
-})
+ipcMain.handle('save-backup', (_e, json) => backupStore.save(String(json)))
+ipcMain.handle('list-backups', () => backupStore.list())
+ipcMain.handle('load-backup', (_e, name) => backupStore.load(name))
 
 // ===== 资讯抓取 =====
 // 抓取过程中的配置缓存（由渲染进程通过 set-news-config 更新）
@@ -308,17 +275,15 @@ let lastDesktopWrite = 0
 let lanPort = null
 let lanInstance = null
 
-// 写入节流：渲染进程高频 setState 时合并为一次落盘，降低整文件重写频率
-let pendingSyncData = null
-let syncWriteTimer = null
-function flushSyncWrite() {
-  if (syncWriteTimer) { clearTimeout(syncWriteTimer); syncWriteTimer = null }
-  if (pendingSyncData === null) return
-  const data = pendingSyncData
-  pendingSyncData = null
-  lastDesktopWrite = Date.now()
-  try { syncStorage && syncStorage.write(data) } catch (e) { console.error('[sync] flush write failed:', e) }
-}
+// 写入节流 + reload 前强制落盘（修复：reload 打断节流计时器导致未落盘数据丢失）
+// 见 electron/sync-manager.cjs 的时序语义与测试
+const syncManager = createSyncManager({
+  write: (data) => {
+    lastDesktopWrite = Date.now()
+    try { syncStorage && syncStorage.write(data) } catch (e) { console.error('[sync] flush write failed:', e) }
+  },
+  reload: reloadRenderers,
+})
 
 function reloadRenderers() {
   for (const win of BrowserWindow.getAllWindows()) {
@@ -350,14 +315,12 @@ function startLanAccess() {
   ipcMain.handle('sync-storage-get', () => syncStorage.read())
   ipcMain.handle('sync-storage-set', (_e, data) => {
     if (typeof data !== 'string') return { ok: false, error: 'invalid data' }
-    // 写入节流：300ms 内的连续写入合并为一次落盘
-    pendingSyncData = data
-    if (!syncWriteTimer) syncWriteTimer = setTimeout(flushSyncWrite, 300)
+    // 写入节流：300ms 内的连续写入合并为一次落盘；reload 前会强制 flush（见 syncManager）
+    syncManager.setPending(data)
     return { ok: true }
   })
   ipcMain.handle('sync-storage-remove', () => {
-    if (syncWriteTimer) { clearTimeout(syncWriteTimer); syncWriteTimer = null }
-    pendingSyncData = null
+    syncManager.clear()
     lastDesktopWrite = Date.now()
     return syncStorage.remove()
   })
@@ -382,7 +345,8 @@ function startLanAccess() {
           const h = storageHash()
           if (h === null || h === lastReloadHash) return
           lastReloadHash = h
-          reloadRenderers()
+          // 关键修复：reload 前先落盘桌面端 pending 数据，避免平板刷新打断节流写入
+          syncManager.flushAndReload()
         }, 300)
       }
     })
@@ -450,6 +414,6 @@ app.on('window-all-closed', () => {
 })
 
 app.on('will-quit', () => {
-  flushSyncWrite() // 退出前把节流中待写入的数据落盘
+  syncManager.flush() // 退出前把节流中待写入的数据落盘
   globalShortcut.unregisterAll()
 })

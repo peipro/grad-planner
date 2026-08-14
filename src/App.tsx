@@ -3,6 +3,7 @@ import { Calendar, CheckSquare, GitBranch, FileText, Timer, BarChart2, Settings,
 import { useStore } from './store'
 import { isHttpUrl } from './lib/external'
 import { performPrepareFlush } from './lib/reload-flush'
+import { useToast } from './lib/toast'
 import CalendarView from './views/CalendarView'
 import TodoView from './views/TodoView'
 import MilestoneView from './views/MilestoneView'
@@ -75,6 +76,20 @@ export default function App() {
         })
       })
     }
+  }, [])
+
+  // 同步冲突提示：sync-adapter 提交被服务端 409 拒绝时触发（绝不静默覆盖，提示用户）
+  useEffect(() => {
+    const onConflict = (e: Event) => {
+      const detail = (e as CustomEvent<{ conflicts?: unknown[] }>).detail
+      const count = Array.isArray(detail?.conflicts) ? detail.conflicts.length : 0
+      const msg = count > 0
+        ? `检测到同步冲突（${count} 处内容与本机同时被修改）：本机修改未保存，远程数据保持不变`
+        : '检测到同步冲突：本机修改未保存，远程数据保持不变'
+      useToast.getState().show(msg, { actionLabel: '重新加载', onAction: () => window.location.reload() })
+    }
+    window.addEventListener('sync-conflict', onConflict)
+    return () => window.removeEventListener('sync-conflict', onConflict)
   }, [])
 
   usePomodoroTicker()

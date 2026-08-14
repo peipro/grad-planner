@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from 'react'
 import { Download, Upload, Trash2, Sun, Moon, Monitor, Palette, History, Newspaper, Bell, Wifi, KeyRound, Copy } from 'lucide-react'
-import { useStore, repairMilestones } from '../store'
+import { useStore, mergePersistedState } from '../store'
+import { validateStorageShape } from '../data/validate'
 import { useToast } from '../lib/toast'
 
 const RSS_SOURCES = [
@@ -103,31 +104,73 @@ export default function SettingsView() {
     URL.revokeObjectURL(url)
   }
 
+  // ===== 数据导入 / 恢复安全流程 =====
+  // 统一流程：读取 → JSON.parse → Schema 校验 → 数据摘要 → 自动备份当前数据 → 用户确认 → 应用（配置字段保真）→ 重新校验
+  // 任何失败：当前数据不受影响。
+
+  const summarizeData = (data: Record<string, unknown>): string => {
+    const count = (k: string) => (Array.isArray(data[k]) ? (data[k] as unknown[]).length : 0)
+    return [
+      `日历 ${count('events')}`,
+      `待办 ${count('tasks')}`,
+      `里程碑 ${count('milestones')}`,
+      `笔记 ${count('notes')}`,
+      `文献 ${count('papers')}`,
+      `番茄钟 ${count('pomodoros')}`,
+      `生日 ${count('birthdays')}`,
+      `习惯 ${count('habits')}`,
+      `项目 ${count('projects')}`,
+    ].join(' · ')
+  }
+
+  // 替换数据前自动备份当前数据（桌面版写磁盘，Web 版写 localStorage），失败不阻塞流程
+  const backupCurrent = (): Promise<void> =>
+    new Promise((resolve) => {
+      const api = (window as any).electronAPI
+      if (api?.saveBackup) {
+        api.saveBackup(JSON.stringify(useStore.getState(), null, 2))
+          .then(() => { setLastBackup(new Date().toISOString()); resolve() })
+          .catch(() => resolve())
+      } else {
+        try {
+          localStorage.setItem('grad-planner-autobackup', JSON.stringify({ time: new Date().toISOString(), data: useStore.getState() }))
+        } catch {}
+        resolve()
+      }
+    })
+
+  // 应用数据：与 persist merge 同一语义（mergePersistedState），配置字段（theme/reminders/autoBackup/newsConfig/pomo 等）完整保留
+  const applyData = (data: unknown): boolean => {
+    const current = useStore.getState()
+    useStore.setState(mergePersistedState(data, current))
+    const recheck = validateStorageShape(useStore.getState())
+    if (!recheck.ok) {
+      console.error('[data] 应用后校验未通过:', recheck.errors)
+      return false
+    }
+    return true
+  }
+
   const importData = (file: File) => {
     const reader = new FileReader()
-    reader.onload = () => {
+    reader.onload = async () => {
+      let data: unknown
       try {
-        const data = JSON.parse(reader.result as string)
-        if (data.events && data.tasks) {
-          useStore.setState({
-            events: data.events,
-            tasks: data.tasks,
-            milestones: repairMilestones(data.milestones),
-            notes: data.notes ?? [],
-            pomodoros: data.pomodoros ?? [],
-            birthdays: data.birthdays ?? [],
-            habits: data.habits ?? [],
-            projects: data.projects ?? [],
-            papers: data.papers ?? [],
-            ...(Array.isArray(data.paperStages) && data.paperStages.length ? { paperStages: data.paperStages } : {}),
-          })
-          alert('导入成功！')
-        } else {
-          alert('文件格式不正确')
-        }
+        data = JSON.parse(reader.result as string)
       } catch {
-        alert('解析失败，请检查文件')
+        alert('解析失败：文件不是合法 JSON，当前数据未受影响')
+        return
       }
+      const v = validateStorageShape(data)
+      if (!v.ok) {
+        alert(`文件格式不正确，当前数据未受影响：\n${v.errors.join('\n')}`)
+        return
+      }
+      const root = data as Record<string, unknown>
+      if (!confirm(`导入将替换当前全部数据。\n\n导入内容：${summarizeData(root)}\n\n导入前会自动备份当前数据。是否继续？`)) return
+      await backupCurrent()
+      const ok = applyData(data)
+      alert(ok ? '导入成功！' : '导入后校验未通过，请检查数据')
     }
     reader.readAsText(file)
   }
@@ -162,29 +205,29 @@ export default function SettingsView() {
   const restoreBackup = (name: string) => {
     const api = (window as any).electronAPI
     if (!api?.loadBackup) return
-    if (!confirm(`从备份 ${name} 恢复？将覆盖当前全部数据。`)) return
-    api.loadBackup(name).then((raw: string | null) => {
+    if (!confirm(`从备份 ${name} 恢复？将覆盖当前全部数据（恢复前会自动备份当前数据）。`)) return
+    api.loadBackup(name).then(async (raw: string | null) => {
       if (!raw) { alert('读取备份失败'); return }
+      let data: unknown
       try {
-        const data = JSON.parse(raw)
-        if (data.events && data.tasks) {
-          useStore.setState({
-            events: data.events,
-            tasks: data.tasks,
-            milestones: repairMilestones(data.milestones),
-            notes: data.notes ?? [],
-            pomodoros: data.pomodoros ?? [],
-            birthdays: data.birthdays ?? [],
-            habits: data.habits ?? [],
-            projects: data.projects ?? [],
-            papers: data.papers ?? [],
-            ...(Array.isArray(data.paperStages) && data.paperStages.length ? { paperStages: data.paperStages } : {}),
-          })
-          useStore.getState().setView('calendar')
-          alert('恢复成功！')
-          setBackupList(backupList.filter((b) => b.name !== name))
-        } else alert('备份文件格式不正确')
-      } catch { alert('解析失败') }
+        data = JSON.parse(raw)
+      } catch {
+        alert('备份文件解析失败，当前数据未受影响')
+        return
+      }
+      const v = validateStorageShape(data)
+      if (!v.ok) {
+        alert(`备份文件格式不正确，当前数据未受影响：\n${v.errors.join('\n')}`)
+        return
+      }
+      const root = data as Record<string, unknown>
+      if (!confirm(`恢复内容：${summarizeData(root)}。确定恢复？`)) return
+      await backupCurrent()
+      const ok = applyData(data)
+      useStore.getState().setView('calendar')
+      alert(ok ? '恢复成功！' : '恢复后校验未通过，请检查备份文件')
+      // 刷新备份列表：磁盘上的备份文件仍然存在，不应从列表移除
+      api.listBackups().then((list: { name: string; size: number; mtime: string }[]) => setBackupList(list)).catch(() => {})
     })
   }
 

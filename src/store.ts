@@ -40,7 +40,7 @@ export interface ReminderConfig {
   taskLeadDays: number
 }
 
-interface PlannerState {
+export interface PlannerState {
   events: CalEvent[]
   tasks: Task[]
   milestones: Milestone[]
@@ -133,6 +133,21 @@ export const repairMilestones = (list: unknown): Milestone[] => {
     })
   }
   return out
+}
+
+// 持久化 merge 语义（persist hydration / 导入 / 恢复共用同一份实现）：
+//  - persisted 覆盖 current 的同名字段；缺失字段由 current 默认值补齐（兼容老版本数据）
+//  - 配置字段（theme/reminders/autoBackup/lastBackup/newsConfig/pomo/activeView 等）完整保留，不静默丢失
+//  - milestones 经自愈修复；pomo 运行时状态与 newsConfig 密钥强制复位（与 partialize 对称）
+export const mergePersistedState = (persisted: unknown, current: PlannerState): PlannerState => {
+  const p = (persisted || {}) as Partial<PlannerState>
+  return {
+    ...current,
+    ...p,
+    milestones: repairMilestones(p.milestones),
+    pomo: { ...current.pomo, ...(p.pomo || {}), running: false, swRunning: false, endAt: undefined, swStartedAt: undefined },
+    newsConfig: { ...current.newsConfig, ...(p.newsConfig || {}), xKey: '', xSecret: '' },
+  }
 }
 
 export const useStore = create<PlannerState>()(
@@ -275,16 +290,7 @@ export const useStore = create<PlannerState>()(
         swStartedAt: undefined,
       },
       newsConfig: { ...state.newsConfig, xKey: '', xSecret: '' },
-    }), merge: (persisted, current) => {
-      const p = (persisted || {}) as Partial<PlannerState>
-      return {
-        ...current,
-        ...p,
-        milestones: repairMilestones(p.milestones),
-        pomo: { ...current.pomo, ...(p.pomo || {}), running: false, swRunning: false, endAt: undefined, swStartedAt: undefined },
-        newsConfig: { ...current.newsConfig, ...(p.newsConfig || {}), xKey: '', xSecret: '' },
-      }
-    } },
+    }), merge: (persisted, current) => mergePersistedState(persisted, current) },
   ),
 )
 

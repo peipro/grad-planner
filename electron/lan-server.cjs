@@ -6,7 +6,9 @@ const http = require('http')
 const fs = require('fs')
 const os = require('os')
 const path = require('path')
+const crypto = require('crypto')
 const { validateStorageShape } = require('./storage-schema.cjs')
+const { applySubmit, emptyEnvelope } = require('./sync-merge.cjs')
 
 const MIME = {
   '.html': 'text/html; charset=utf-8',
@@ -201,41 +203,74 @@ function createLanServer({ webRoot, storageFile, basePort = 8899, token = '' }) 
         size += c.length
         if (size > MAX_BODY) {
           tooLarge = true
-          chunks.length = 0 // 释放已收集的 body，避免内存持续增长
+          chunks.length = 0
           res.writeHead(413, { 'Content-Type': 'text/plain; charset=utf-8' })
           res.end('too large')
-          // 不 destroy：让 413 响应完整送达客户端；后续 data 因 tooLarge 直接丢弃
           return
         }
         chunks.push(c)
       })
-      req.on('end', () => {
-        if (tooLarge) return // 已返回 413，不再写入
+      req.on('end', async () => {
+        if (tooLarge) return
         const body = Buffer.concat(chunks).toString('utf-8')
-        // 严格校验：非法 JSON / 结构不正确 → 400，绝对不能修改现有 storage
-        let parsed
+        // 解析提交（Phase 1B：{ expectedRevision, deviceId, changedIds, deletedIds, data }）
+        let submit
         try {
-          parsed = JSON.parse(body)
+          submit = JSON.parse(body)
         } catch {
           res.writeHead(400, { 'Content-Type': 'text/plain; charset=utf-8' })
           res.end('invalid json')
           log(method, url, res.statusCode, req)
           return
         }
-        const v = validateStorageShape(parsed)
+        if (!submit || typeof submit !== 'object' || typeof submit.data !== 'object' || submit.data === null) {
+          res.writeHead(400, { 'Content-Type': 'text/plain; charset=utf-8' })
+          res.end('invalid submit')
+          log(method, url, res.statusCode, req)
+          return
+        }
+        // 顶层结构校验（data 内数组字段必须是数组）
+        const v = validateStorageShape(submit.data)
         if (!v.ok) {
           res.writeHead(400, { 'Content-Type': 'text/plain; charset=utf-8' })
           res.end(v.errors.join('; '))
           log(method, url, res.statusCode, req)
           return
         }
-        const r = storage.write(body)
-        if (r.ok) {
+        const r = storage.read()
+        const currentText = r.found ? r.data : JSON.stringify(await emptyEnvelope('lan-server'))
+        const result = await applySubmit({
+          currentText,
+          submit,
+          deviceId: String(submit.deviceId || 'lan-client'),
+          writeId: `w-${crypto.randomUUID()}`,
+        })
+        if (!result.ok) {
+          if (result.status === 409) {
+            res.writeHead(409, { 'Content-Type': 'application/json; charset=utf-8' })
+            res.end(JSON.stringify({
+              ok: false,
+              status: 409,
+              error: result.error,
+              conflicts: result.conflicts || [],
+              serverRevision: result.serverRevision,
+              serverData: result.serverData,
+              clientData: result.clientData,
+            }))
+          } else {
+            res.writeHead(400, { 'Content-Type': 'text/plain; charset=utf-8' })
+            res.end(result.error || 'invalid submit')
+          }
+          log(method, url, res.statusCode, req)
+          return
+        }
+        const w = storage.write(JSON.stringify(result.envelope))
+        if (w.ok) {
           res.writeHead(200, { 'Content-Type': 'application/json; charset=utf-8' })
-          res.end('{"ok":true}')
+          res.end(JSON.stringify({ ok: true, revision: result.revision }))
         } else {
           res.writeHead(500, { 'Content-Type': 'text/plain; charset=utf-8' })
-          res.end(r.error || 'write failed')
+          res.end(w.error || 'write failed')
         }
         log(method, url, res.statusCode, req)
       })

@@ -9,6 +9,17 @@ const { createBackupStore } = require('./backup-store.cjs')
 const { createCredentialsStore } = require('./credentials-store.cjs')
 const { isAllowedExternalUrl } = require('./url-security.cjs')
 const { CSP } = require('./csp.cjs')
+const { applySubmit, emptyEnvelope } = require('./sync-merge.cjs')
+
+// 读取 storage envelope（sync-core.js 为 ESM/UMD，经动态 import 获取，见 sync-merge.cjs 说明）
+let _syncCore = null
+async function readEnvelopeFor(text) {
+  if (!_syncCore) {
+    await import('../public/sync-core.js')
+    _syncCore = globalThis.SyncCore
+  }
+  return _syncCore ? _syncCore.unwrapEnvelope(text) : null
+}
 
 const isDev = !app.isPackaged
 
@@ -333,6 +344,27 @@ function reloadRenderers() {
   }
 }
 
+// ===== 设备身份（Phase 1B Task 2） =====
+// 每个运行端有稳定 deviceId（持久化，重启不变），写入来源不再依赖时间猜测。
+let cachedDeviceId = null
+function ensureDeviceId() {
+  if (cachedDeviceId) return cachedDeviceId
+  const file = path.join(app.getPath('userData'), 'device-id.txt')
+  try {
+    const existing = fs.readFileSync(file, 'utf-8').trim()
+    if (existing) {
+      cachedDeviceId = existing
+      return existing
+    }
+  } catch {}
+  const id = `desktop-${crypto.randomUUID()}`
+  try {
+    fs.writeFileSync(file, id, 'utf-8')
+  } catch {}
+  cachedDeviceId = id
+  return id
+}
+
 // 生成或读取局域网访问 token（首次启动随机生成并持久化）
 function ensureLanToken() {
   const file = path.join(app.getPath('userData'), 'lan-token.txt')
@@ -348,15 +380,50 @@ function ensureLanToken() {
 function startLanAccess() {
   const storageFile = path.join(app.getPath('userData'), 'sync', 'grad-planner-storage.json')
   syncStorage = createStorageAccess(storageFile)
-  ipcMain.handle('sync-storage-get', () => syncStorage.read())
-  ipcMain.handle('sync-storage-set', (_e, data) => {
-    if (typeof data !== 'string') return { ok: false, error: 'invalid data' }
+
+  // 内存中的最新 envelope（含节流中未落盘的提交）；崩溃后回退到文件（节流窗口内最多丢 300ms 提交）
+  let currentEnvelopeText = null
+
+  ipcMain.handle('sync-storage-get', async () => {
+    const r = syncStorage.read()
+    const text = currentEnvelopeText || (r.found ? r.data : null)
+    if (text === null) {
+      return { found: false, data: null, revision: 0, deviceId: ensureDeviceId() }
+    }
+    const env = await readEnvelopeFor(text)
+    if (!env) return { found: false, data: null, revision: 0, deviceId: ensureDeviceId() }
+    return { found: true, data: JSON.stringify(env.data), revision: env.revision, deviceId: ensureDeviceId() }
+  })
+  ipcMain.handle('sync-storage-set', async (_e, submit) => {
+    const r = syncStorage.read()
+    const currentText = currentEnvelopeText || (r.found ? r.data : JSON.stringify(await emptyEnvelope(ensureDeviceId())))
+    const result = await applySubmit({
+      currentText,
+      submit,
+      deviceId: ensureDeviceId(),
+      writeId: `w-${crypto.randomUUID()}`,
+    })
+    if (!result.ok) {
+      if (result.status === 409) {
+        return {
+          ok: false,
+          status: 409,
+          error: result.error,
+          conflicts: result.conflicts,
+          serverRevision: result.serverRevision,
+          serverData: result.serverData,
+        }
+      }
+      return { ok: false, error: result.error }
+    }
+    currentEnvelopeText = JSON.stringify(result.envelope)
     // 写入节流：300ms 内的连续写入合并为一次落盘；reload 前会强制 flush（见 syncManager）
-    syncManager.setPending(data)
-    return { ok: true }
+    syncManager.setPending(currentEnvelopeText)
+    return { ok: true, revision: result.revision }
   })
   ipcMain.handle('sync-storage-remove', () => {
     syncManager.clear()
+    currentEnvelopeText = null
     lastDesktopWrite = Date.now()
     return syncStorage.remove()
   })
@@ -371,6 +438,9 @@ function startLanAccess() {
   }
   try {
     fs.mkdirSync(path.dirname(storageFile), { recursive: true })
+    // 初始化内存 envelope：文件存在时读取
+    const initRead = syncStorage.read()
+    if (initRead.found) currentEnvelopeText = initRead.data
     lastReloadHash = storageHash()
     syncWatcher = fs.watch(path.dirname(storageFile), { persistent: false }, (evt, name) => {
       if (name && name.endsWith('grad-planner-storage.json')) {

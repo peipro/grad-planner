@@ -9,6 +9,9 @@ function tmpDir() {
   return fs.mkdtempSync(path.join(os.tmpdir(), 'lan-test-'))
 }
 
+// Phase 1B：PUT 提交为 submit 结构（expectedRevision/deviceId/changedIds/deletedIds/data）
+const mkSubmit = (data, over = {}) => ({ expectedRevision: 0, deviceId: 'test-dev', changedIds: [], deletedIds: [], data, ...over })
+
 test('resolveWebPath 正常文件与 index 回退', () => {
   const root = tmpDir()
   fs.mkdirSync(path.join(root, 'assets'))
@@ -42,7 +45,7 @@ test('createStorageAccess 读写删', () => {
   assert.deepStrictEqual(acc.read(), { found: false, data: null })
 })
 
-test('HTTP: 静态文件、API 读写、404、405', async () => {
+test('HTTP: 静态文件、404、405', async () => {
   const root = tmpDir()
   fs.writeFileSync(path.join(root, 'index.html'), '<html>ok</html>')
   fs.writeFileSync(path.join(root, 'sync-adapter.js'), 'adapter')
@@ -61,18 +64,6 @@ test('HTTP: 静态文件、API 读写、404、405', async () => {
     assert.strictEqual(r.status, 200)
     assert.strictEqual(await r.text(), 'adapter')
 
-    r = await fetch(`${base}/api/storage`)
-    assert.strictEqual(r.status, 404)
-
-    r = await fetch(`${base}/api/storage`, { method: 'PUT', body: '{"x":1}' })
-    assert.strictEqual(r.status, 200)
-
-    r = await fetch(`${base}/api/storage`)
-    assert.strictEqual(r.status, 200)
-    assert.strictEqual(await r.text(), '{"x":1}')
-
-    r = await fetch(`${base}/api/storage`, { method: 'DELETE' })
-    assert.strictEqual(r.status, 200)
     r = await fetch(`${base}/api/storage`)
     assert.strictEqual(r.status, 404)
 
@@ -137,7 +128,7 @@ test('HTTP: token 鉴权保护 /api/storage，静态页面开放', async () => {
     r = await fetch(`${base}/api/storage?token=secret123`)
     assert.strictEqual(r.status, 404)
 
-    r = await fetch(`${base}/api/storage?token=secret123`, { method: 'PUT', body: '{"x":1}' })
+    r = await fetch(`${base}/api/storage?token=secret123`, { method: 'PUT', body: JSON.stringify(mkSubmit({ tasks: [] })) })
     assert.strictEqual(r.status, 200)
 
     r = await fetch(`${base}/api/storage`, { headers: { Authorization: 'Bearer secret123' } })
@@ -156,7 +147,7 @@ test('HTTP: 访问日志不记录 token 查询串', async () => {
   const port = await inst.start()
   const base = `http://127.0.0.1:${port}`
   try {
-    const r = await fetch(`${base}/api/storage?token=leakcheck123`, { method: 'PUT', body: '{}' })
+    const r = await fetch(`${base}/api/storage?token=leakcheck123`, { method: 'PUT', body: JSON.stringify(mkSubmit({})) })
     assert.strictEqual(r.status, 200)
     const logText = fs.readFileSync(path.join(dir, 'sync', 'lan-access.log'), 'utf-8')
     assert.ok(logText.includes('/api/storage'), '日志应记录请求路径')
@@ -175,20 +166,20 @@ test('HTTP: setToken 热重置令牌', async () => {
   const base = `http://127.0.0.1:${port}`
   try {
     let r = await fetch(`${base}/api/storage?token=oldtoken`)
-    assert.strictEqual(r.status, 404) // 旧令牌有效
+    assert.strictEqual(r.status, 404)
     inst.setToken('newtoken')
     r = await fetch(`${base}/api/storage?token=oldtoken`)
-    assert.strictEqual(r.status, 401) // 旧令牌失效
+    assert.strictEqual(r.status, 401)
     r = await fetch(`${base}/api/storage?token=newtoken`)
-    assert.strictEqual(r.status, 404) // 新令牌生效
+    assert.strictEqual(r.status, 404)
   } finally {
     await inst.stop()
   }
 })
 
-// ===== Task 2: PUT 严格校验 JSON（非法内容绝不允许写坏唯一数据源） =====
+// ===== Phase 1B: PUT 提交（envelope + revision） =====
 
-test('HTTP: 非法 JSON PUT → 400 且原文件不变', async () => {
+test('HTTP: 合法 submit → 200 + revision，GET 返回 envelope', async () => {
   const root = tmpDir()
   fs.writeFileSync(path.join(root, 'index.html'), 'ok')
   const storageFile = path.join(tmpDir(), 'sync', 'grad.json')
@@ -196,22 +187,47 @@ test('HTTP: 非法 JSON PUT → 400 且原文件不变', async () => {
   const port = await inst.start()
   const base = `http://127.0.0.1:${port}`
   try {
-    // 先写入一份合法数据
-    let r = await fetch(`${base}/api/storage`, { method: 'PUT', body: '{"tasks":[{"id":"t1"}]}' })
+    const r = await fetch(`${base}/api/storage`, { method: 'PUT', body: JSON.stringify(mkSubmit({ tasks: [{ id: 't1', title: '写论文' }] }, { changedIds: ['tasks:t1'] })) })
+    assert.strictEqual(r.status, 200)
+    const body = await r.json()
+    assert.strictEqual(body.ok, true)
+    assert.strictEqual(body.revision, 1)
+
+    const r2 = await fetch(`${base}/api/storage`)
+    assert.strictEqual(r2.status, 200)
+    const env = await r2.json()
+    assert.strictEqual(env.schemaVersion, 1)
+    assert.strictEqual(env.revision, 1)
+    assert.strictEqual(env.data.tasks[0].title, '写论文')
+    assert.ok(env.deviceId.length > 0, 'envelope 必须携带写入者 deviceId')
+    assert.ok(env.writeId.length > 0, 'envelope 必须携带 writeId')
+  } finally {
+    await inst.stop()
+  }
+})
+
+test('HTTP: 非法 JSON → 400 且原文件不变', async () => {
+  const root = tmpDir()
+  fs.writeFileSync(path.join(root, 'index.html'), 'ok')
+  const storageFile = path.join(tmpDir(), 'sync', 'grad.json')
+  const inst = createLanServer({ webRoot: root, storageFile, basePort: 0 })
+  const port = await inst.start()
+  const base = `http://127.0.0.1:${port}`
+  try {
+    let r = await fetch(`${base}/api/storage`, { method: 'PUT', body: JSON.stringify(mkSubmit({ tasks: [] })) })
     assert.strictEqual(r.status, 200)
 
-    // 非法 JSON：必须 400，且文件保持原样
     r = await fetch(`${base}/api/storage`, { method: 'PUT', body: '这不是JSON{{{{' })
     assert.strictEqual(r.status, 400)
     r = await fetch(`${base}/api/storage`)
-    assert.strictEqual(r.status, 200)
-    assert.strictEqual(await r.text(), '{"tasks":[{"id":"t1"}]}', '非法 JSON 不得修改现有 storage')
+    const env = await r.json()
+    assert.strictEqual(env.revision, 1, '非法 JSON 不得修改现有 storage')
   } finally {
     await inst.stop()
   }
 })
 
-test('HTTP: 顶层结构错误（字段应为数组却是其他类型）→ 400', async () => {
+test('HTTP: submit 结构错误（data 非对象 / 缺 data）→ 400', async () => {
   const root = tmpDir()
   fs.writeFileSync(path.join(root, 'index.html'), 'ok')
   const storageFile = path.join(tmpDir(), 'sync', 'grad.json')
@@ -219,16 +235,13 @@ test('HTTP: 顶层结构错误（字段应为数组却是其他类型）→ 400'
   const port = await inst.start()
   const base = `http://127.0.0.1:${port}`
   try {
-    let r = await fetch(`${base}/api/storage`, { method: 'PUT', body: '{"events":"not-an-array"}' })
+    let r = await fetch(`${base}/api/storage`, { method: 'PUT', body: JSON.stringify({ expectedRevision: 0 }) })
     assert.strictEqual(r.status, 400)
-    r = await fetch(`${base}/api/storage`, { method: 'PUT', body: '{"tasks":{}}' })
+    r = await fetch(`${base}/api/storage`, { method: 'PUT', body: JSON.stringify(mkSubmit('not-object')) })
     assert.strictEqual(r.status, 400)
-    r = await fetch(`${base}/api/storage`, { method: 'PUT', body: '{"paperStages":["a", 3]}' })
+    r = await fetch(`${base}/api/storage`, { method: 'PUT', body: JSON.stringify(mkSubmit({ tasks: 'not-array' })) })
     assert.strictEqual(r.status, 400)
-    // 根节点必须是对象
-    r = await fetch(`${base}/api/storage`, { method: 'PUT', body: '[1,2,3]' })
-    assert.strictEqual(r.status, 400)
-    // 原文件仍不存在（全部被拒绝）
+    // 原文件仍不存在
     r = await fetch(`${base}/api/storage`)
     assert.strictEqual(r.status, 404)
   } finally {
@@ -236,7 +249,7 @@ test('HTTP: 顶层结构错误（字段应为数组却是其他类型）→ 400'
   }
 })
 
-test('HTTP: 合法 JSON → 200 且数据正确写入', async () => {
+test('HTTP: stale write（旧 revision）→ 409，不覆盖新数据', async () => {
   const root = tmpDir()
   fs.writeFileSync(path.join(root, 'index.html'), 'ok')
   const storageFile = path.join(tmpDir(), 'sync', 'grad.json')
@@ -244,25 +257,19 @@ test('HTTP: 合法 JSON → 200 且数据正确写入', async () => {
   const port = await inst.start()
   const base = `http://127.0.0.1:${port}`
   try {
-    const payload = JSON.stringify({
-      events: [{ id: 'e1', title: '组会' }],
-      tasks: [{ id: 't1', title: '写论文' }],
-      milestones: [],
-      notes: [],
-      pomodoros: [],
-      birthdays: [],
-      habits: [],
-      projects: [],
-      papers: [],
-      paperStages: ['阶段0'],
-    })
-    let r = await fetch(`${base}/api/storage`, { method: 'PUT', body: payload })
+    // 第一次提交（revision 0 → 1）
+    let r = await fetch(`${base}/api/storage`, { method: 'PUT', body: JSON.stringify(mkSubmit({ tasks: [{ id: 't1', title: '新数据' }] }, { changedIds: ['tasks:t1'] })) })
     assert.strictEqual(r.status, 200)
-    r = await fetch(`${base}/api/storage`)
-    assert.strictEqual(r.status, 200)
-    const saved = JSON.parse(await r.text())
-    assert.strictEqual(saved.tasks[0].title, '写论文')
-    assert.strictEqual(saved.paperStages[0], '阶段0')
+    // 用旧 revision 0 提交（stale）→ 409
+    r = await fetch(`${base}/api/storage`, { method: 'PUT', body: JSON.stringify(mkSubmit({ tasks: [{ id: 't1', title: '旧数据' }] }, { expectedRevision: 0, changedIds: ['tasks:t1'] })) })
+    assert.strictEqual(r.status, 409)
+    const body = await r.json()
+    assert.strictEqual(body.status, 409)
+    assert.strictEqual(body.serverData.tasks[0].title, '新数据', '服务端数据必须保持不变')
+    // 文件仍是最新数据
+    const r2 = await fetch(`${base}/api/storage`)
+    const env = await r2.json()
+    assert.strictEqual(env.data.tasks[0].title, '新数据')
   } finally {
     await inst.stop()
   }
@@ -276,8 +283,7 @@ test('HTTP: 超大 body → 413 且不写盘', async () => {
   const port = await inst.start()
   const base = `http://127.0.0.1:${port}`
   try {
-    // 11MB 超过 MAX_BODY(10MB)
-    const big = JSON.stringify({ tasks: 'x'.repeat(11 * 1024 * 1024) })
+    const big = JSON.stringify(mkSubmit({ tasks: 'x'.repeat(11 * 1024 * 1024) }))
     const r = await fetch(`${base}/api/storage`, { method: 'PUT', body: big })
     assert.strictEqual(r.status, 413)
     const r2 = await fetch(`${base}/api/storage`)
@@ -287,7 +293,7 @@ test('HTTP: 超大 body → 413 且不写盘', async () => {
   }
 })
 
-test('HTTP: 并发 PUT（多客户端同时写入）不互相损坏，最后一次生效', async () => {
+test('HTTP: 并发 PUT 保持文件完整合法（revision 单调递增，无冲突时都接受）', async () => {
   const root = tmpDir()
   fs.writeFileSync(path.join(root, 'index.html'), 'ok')
   const storageFile = path.join(tmpDir(), 'sync', 'grad.json')
@@ -295,22 +301,24 @@ test('HTTP: 并发 PUT（多客户端同时写入）不互相损坏，最后一�
   const port = await inst.start()
   const base = `http://127.0.0.1:${port}`
   try {
-    const mk = (n) => JSON.stringify({ tasks: [{ id: n, title: 'T' + n }] })
-    await Promise.all([
-      fetch(`${base}/api/storage`, { method: 'PUT', body: mk('a') }),
-      fetch(`${base}/api/storage`, { method: 'PUT', body: mk('b') }),
-      fetch(`${base}/api/storage`, { method: 'PUT', body: mk('c') }),
+    // 两个并发提交，各自期望 revision 0：一个成功（revision 1），另一个 stale（无 changedIds → merge 接受或 409）
+    const results = await Promise.all([
+      fetch(`${base}/api/storage`, { method: 'PUT', body: JSON.stringify(mkSubmit({ tasks: [{ id: 'a', title: 'A' }] }, { changedIds: ['tasks:a'] })) }),
+      fetch(`${base}/api/storage`, { method: 'PUT', body: JSON.stringify(mkSubmit({ tasks: [{ id: 'b', title: 'B' }] }, { changedIds: ['tasks:b'] })) }),
     ])
+    const statuses = results.map((r) => r.status)
+    assert.ok(statuses.includes(200), '至少一个成功')
+    // 文件必须是完整合法 envelope
     const r = await fetch(`${base}/api/storage`)
-    const saved = JSON.parse(await r.text())
-    assert.ok(['a', 'b', 'c'].includes(saved.tasks[0].id), '并发写入后文件必须是完整合法 JSON')
-    assert.strictEqual(saved.tasks.length, 1, 'last-write-wins：最终只保留最后一份（已知限制，Phase 1 处理冲突）')
+    const env = await r.json()
+    assert.strictEqual(typeof env.revision, 'number')
+    assert.ok(env.revision >= 1, 'revision 单调递增')
   } finally {
     await inst.stop()
   }
 })
 
-// ===== Task 5: LAN Origin / CSRF 防护（写操作跨站防护，不破坏合法同步） =====
+// ===== Task 5: LAN Origin / CSRF 防护 =====
 
 test('HTTP: 合法请求（无 Origin，如 curl/CLI）不受影响', async () => {
   const root = tmpDir()
@@ -320,13 +328,10 @@ test('HTTP: 合法请求（无 Origin，如 curl/CLI）不受影响', async () =
   const port = await inst.start()
   const base = `http://127.0.0.1:${port}`
   try {
-    // GET 无 Origin
     let r = await fetch(`${base}/api/storage`)
     assert.strictEqual(r.status, 404)
-    // PUT 无 Origin（curl / CLI 场景）
-    r = await fetch(`${base}/api/storage`, { method: 'PUT', body: '{"tasks":[]}' })
+    r = await fetch(`${base}/api/storage`, { method: 'PUT', body: JSON.stringify(mkSubmit({ tasks: [] })) })
     assert.strictEqual(r.status, 200)
-    // DELETE 无 Origin
     r = await fetch(`${base}/api/storage`, { method: 'DELETE' })
     assert.strictEqual(r.status, 200)
   } finally {
@@ -341,18 +346,15 @@ test('HTTP: 合法平板同步（自身 Origin）不受影响', async () => {
   const inst = createLanServer({ webRoot: root, storageFile, basePort: 0 })
   const port = await inst.start()
   const base = `http://127.0.0.1:${port}`
-  const selfOrigin = base // http://127.0.0.1:port
+  const selfOrigin = base
   try {
-    // GET
     let r = await fetch(`${base}/api/storage`, { headers: { Origin: selfOrigin } })
     assert.strictEqual(r.status, 404)
-    // PUT
-    r = await fetch(`${base}/api/storage`, { method: 'PUT', headers: { Origin: selfOrigin }, body: '{"events":[]}' })
+    r = await fetch(`${base}/api/storage`, { method: 'PUT', headers: { Origin: selfOrigin }, body: JSON.stringify(mkSubmit({ events: [] })) })
     assert.strictEqual(r.status, 200)
-    // GET 回读
     r = await fetch(`${base}/api/storage`)
-    assert.strictEqual(await r.text(), '{"events":[]}')
-    // DELETE
+    const env = await r.json()
+    assert.strictEqual(env.revision, 1)
     r = await fetch(`${base}/api/storage`, { method: 'DELETE', headers: { Origin: selfOrigin } })
     assert.strictEqual(r.status, 200)
   } finally {
@@ -367,7 +369,7 @@ test('HTTP: localhost 本机变体 Origin 允许', async () => {
   const inst = createLanServer({ webRoot: root, storageFile, basePort: 0 })
   const port = await inst.start()
   try {
-    const r = await fetch(`http://127.0.0.1:${port}/api/storage`, { method: 'PUT', headers: { Origin: `http://localhost:${port}` }, body: '{"tasks":[]}' })
+    const r = await fetch(`http://127.0.0.1:${port}/api/storage`, { method: 'PUT', headers: { Origin: `http://localhost:${port}` }, body: JSON.stringify(mkSubmit({ tasks: [] })) })
     assert.strictEqual(r.status, 200)
   } finally {
     await inst.stop()
@@ -382,9 +384,8 @@ test('HTTP: 恶意跨站 PUT（evil Origin）→ 403 且不写盘', async () => 
   const port = await inst.start()
   const base = `http://127.0.0.1:${port}`
   try {
-    let r = await fetch(`${base}/api/storage`, { method: 'PUT', headers: { Origin: 'http://evil.com' }, body: '{"tasks":[{"id":"evil"}]}' })
+    let r = await fetch(`${base}/api/storage`, { method: 'PUT', headers: { Origin: 'http://evil.com' }, body: JSON.stringify(mkSubmit({ tasks: [{ id: 'evil' }] })) })
     assert.strictEqual(r.status, 403)
-    // 原文件未被写入
     r = await fetch(`${base}/api/storage`)
     assert.strictEqual(r.status, 404, '恶意跨站 PUT 不得写盘')
   } finally {
@@ -400,11 +401,9 @@ test('HTTP: 恶意跨站 DELETE（evil Origin）→ 403', async () => {
   const port = await inst.start()
   const base = `http://127.0.0.1:${port}`
   try {
-    // 先写入合法数据
-    await fetch(`${base}/api/storage`, { method: 'PUT', body: '{"tasks":[]}' })
+    await fetch(`${base}/api/storage`, { method: 'PUT', body: JSON.stringify(mkSubmit({ tasks: [] })) })
     const r = await fetch(`${base}/api/storage`, { method: 'DELETE', headers: { Origin: 'http://evil.com' } })
     assert.strictEqual(r.status, 403)
-    // 数据未被删除
     const r2 = await fetch(`${base}/api/storage`)
     assert.strictEqual(r2.status, 200, '恶意跨站 DELETE 不得删除数据')
   } finally {
@@ -420,8 +419,8 @@ test('HTTP: 恶意非 http Origin → 403', async () => {
   const port = await inst.start()
   const base = `http://127.0.0.1:${port}`
   try {
-    for (const bad of ['null', 'file:///etc', 'http://'] ) {
-      const r = await fetch(`${base}/api/storage`, { method: 'PUT', headers: { Origin: bad }, body: '{"tasks":[]}' })
+    for (const bad of ['null', 'file:///etc', 'http://']) {
+      const r = await fetch(`${base}/api/storage`, { method: 'PUT', headers: { Origin: bad }, body: JSON.stringify(mkSubmit({ tasks: [] })) })
       assert.strictEqual(r.status, 403, `Origin=${bad} 应被拒绝`)
     }
   } finally {

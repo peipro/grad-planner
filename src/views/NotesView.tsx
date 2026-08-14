@@ -1,4 +1,4 @@
-import { useMemo, useState } from 'react'
+import { useMemo, useState, useEffect } from 'react'
 import { format } from 'date-fns'
 import { Plus, Trash2, FileText, Search, Eye, PencilLine } from 'lucide-react'
 import { marked } from 'marked'
@@ -6,6 +6,7 @@ import DOMPurify from 'dompurify'
 import { useStore, uid } from '../store'
 import { Note } from '../types'
 import { useToast } from '../lib/toast'
+import { PREPARE_FLUSH_EVENT } from '../lib/reload-flush'
 
 marked.setOptions({ gfm: true, breaks: true })
 
@@ -70,6 +71,25 @@ export default function NotesView() {
   const persistTags = () => {
     if (selected) updateNote({ ...selected, tags: tagsDraft.split(/[,，]/).map((t) => t.trim()).filter(Boolean), updatedAt: new Date().toISOString() })
   }
+
+  // Renderer Flush Protocol：主进程 reload 前提交未 blur 的草稿（标题/标签/正文），防止正在编辑的内容丢失
+  // 注意：必须基于 store 最新快照单次原子提交，避免多个 updateNote 用旧 selected 快照互相覆盖
+  useEffect(() => {
+    const commit = () => {
+      if (!selected) return
+      const note = useStore.getState().notes.find((n) => n.id === selected.id)
+      if (!note) return
+      updateNote({
+        ...note,
+        title: titleDraft.trim() || note.title,
+        tags: tagsDraft.split(/[,，]/).map((t) => t.trim()).filter(Boolean),
+        content,
+        updatedAt: new Date().toISOString(),
+      })
+    }
+    window.addEventListener(PREPARE_FLUSH_EVENT, commit)
+    return () => window.removeEventListener(PREPARE_FLUSH_EVENT, commit)
+  }, [selected, content, titleDraft, tagsDraft, updateNote])
 
   return (
     <div>

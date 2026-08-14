@@ -295,3 +295,12 @@ export const useStore = create<PlannerState>()(
 )
 
 export const uid = () => Math.random().toString(36).slice(2) + Date.now().toString(36)
+
+// 序列化当前持久化 state（与 persist 的 partialize 一致，供 renderer flush 协议使用）
+// 用于 prepare-reload 时把最新数据直接推给主进程，确保 reload 前已进入 pendingSyncData
+export const serializePersistedState = (): string => {
+  const state = useStore.getState()
+  const options = useStore.persist.getOptions()
+  const partial = options.partialize ? options.partialize(state) : state
+  return JSON.stringify(partial)
+}

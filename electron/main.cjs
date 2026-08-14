@@ -277,6 +277,40 @@ let lastDesktopWrite = 0
 let lanPort = null
 let lanInstance = null
 
+// ===== Renderer Flush Protocol（Task 1） =====
+// 外部写入触发 reload 前，必须让 renderer 提交未 blur 的草稿（onBlur 尚未触发的内容），
+// 并把最新持久化 state 推给主进程，ACK 后主进程才 flush + reload。
+// 协议：main send('prepare-reload') → renderer 提交草稿 + syncStorageSet → renderer invoke('renderer-flush-ack') → main flushAndReload()
+let rendererFlushResolve = null
+ipcMain.handle('renderer-flush-ack', () => {
+  if (rendererFlushResolve) {
+    const r = rendererFlushResolve
+    rendererFlushResolve = null
+    r()
+  }
+  return true
+})
+
+// 准备 reload：通知 renderer 提交草稿并等待 ACK，然后 flush + reload。
+// 超时兜底（3s）仅为防御 renderer 无响应/崩溃，正常流程由 ACK 事件驱动，不依赖等待。
+function prepareAndReload() {
+  return new Promise((resolve) => {
+    const timeout = setTimeout(() => {
+      rendererFlushResolve = null
+      resolve()
+    }, 3000)
+    rendererFlushResolve = () => {
+      clearTimeout(timeout)
+      resolve()
+    }
+    for (const win of BrowserWindow.getAllWindows()) {
+      if (win.isDestroyed()) continue
+      if (String(win.webContents.getURL()).includes('translate.html')) continue
+      win.webContents.send('prepare-reload')
+    }
+  }).then(() => syncManager.flushAndReload())
+}
+
 // 写入节流 + reload 前强制落盘（修复：reload 打断节流计时器导致未落盘数据丢失）
 // 见 electron/sync-manager.cjs 的时序语义与测试
 const syncManager = createSyncManager({
@@ -347,8 +381,8 @@ function startLanAccess() {
           const h = storageHash()
           if (h === null || h === lastReloadHash) return
           lastReloadHash = h
-          // 关键修复：reload 前先落盘桌面端 pending 数据，避免平板刷新打断节流写入
-          syncManager.flushAndReload()
+          // reload 前先落盘桌面端 pending 数据 + renderer 草稿（flush 协议），避免刷新丢数据
+          prepareAndReload()
         }, 300)
       }
     })

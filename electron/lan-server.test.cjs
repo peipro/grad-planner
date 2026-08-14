@@ -582,3 +582,81 @@ test('双通道同一引擎：未注入 mutationEngine 时 POST /api/mutations �
     await inst.stop()
   }
 })
+
+// ===== Phase 1B-3A：Event + Project 通过 LAN（同一 Mutation Engine） =====
+
+test('HTTP: POST /api/mutations event.create → 200，权威与磁盘均含事件', async () => {
+  const root = tmpDir()
+  fs.writeFileSync(path.join(root, 'index.html'), 'ok')
+  const storageFile = path.join(tmpDir(), 'sync', 'grad.json')
+  const engine = createMutationEngine({ storageFile })
+  const inst = createLanServer({ webRoot: root, storageFile, basePort: 0, mutationEngine: engine })
+  const port = await inst.start()
+  const base = `http://127.0.0.1:${port}`
+  try {
+    const r = await fetch(`${base}/api/mutations`, {
+      method: 'POST',
+      body: JSON.stringify({ mutations: [{ type: 'event.create', payload: { id: 'e1', title: '平板事件', start: 'x', end: 'y', type: 'meeting' } }] }),
+    })
+    assert.strictEqual(r.status, 200)
+    assert.strictEqual(engine.getState().events.length, 1)
+    assert.strictEqual(JSON.parse(fs.readFileSync(storageFile, 'utf-8')).state.events[0].title, '平板事件')
+  } finally {
+    await inst.stop()
+  }
+})
+
+test('HTTP: project.delete 事务通过 LAN（关联 task 解引用，一次写盘）', async () => {
+  const root = tmpDir()
+  fs.writeFileSync(path.join(root, 'index.html'), 'ok')
+  const storageFile = path.join(tmpDir(), 'sync', 'grad.json')
+  const engine = createMutationEngine({ storageFile })
+  const inst = createLanServer({ webRoot: root, storageFile, basePort: 0, mutationEngine: engine })
+  const port = await inst.start()
+  const base = `http://127.0.0.1:${port}`
+  const post = (mutations) => fetch(`${base}/api/mutations`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ mutations }),
+  })
+  try {
+    await post([{ type: 'project.create', payload: { id: 'p1', name: 'P1', color: 'blue' } }])
+    await post([{ type: 'task.create', payload: { id: 't1', title: 'T1', priority: 'medium', status: 'todo', projectId: 'p1', createdAt: 'x' } }])
+    const r = await post([{ type: 'project.delete', id: 'p1' }])
+    assert.strictEqual(r.status, 200)
+    const st = engine.getState()
+    assert.strictEqual(st.projects.length, 0)
+    assert.strictEqual(st.tasks[0].projectId, undefined)
+  } finally {
+    await inst.stop()
+  }
+})
+
+test('双端不同实体并发：Desktop（IPC）改 Task + Tablet（HTTP）改 Project → 两者都保留', async () => {
+  const root = tmpDir()
+  fs.writeFileSync(path.join(root, 'index.html'), 'ok')
+  const storageFile = path.join(tmpDir(), 'sync', 'grad.json')
+  const engine = createMutationEngine({ storageFile })
+  const inst = createLanServer({ webRoot: root, storageFile, basePort: 0, mutationEngine: engine })
+  const port = await inst.start()
+  const base = `http://127.0.0.1:${port}`
+  try {
+    // 初始：task t1 + project p1
+    assert.strictEqual(engine.applyMutations([{ type: 'task.create', payload: { id: 't1', title: 'T1', priority: 'medium', status: 'todo', createdAt: 'x' } }]).ok, true)
+    const r0 = await fetch(`${base}/api/mutations`, { method: 'POST', body: JSON.stringify({ mutations: [{ type: 'project.create', payload: { id: 'p1', name: 'P1', color: 'blue' } }] }) })
+    assert.strictEqual(r0.status, 200)
+    // 桌面改 Task（IPC 路径）
+    assert.strictEqual(engine.applyMutations([{ type: 'task.update', id: 't1', entity: { id: 't1', title: 'T1-桌面改', priority: 'high', status: 'doing', createdAt: 'x' } }]).ok, true)
+    // 平板改 Project（HTTP 路径）
+    const r1 = await fetch(`${base}/api/mutations`, { method: 'POST', body: JSON.stringify({ mutations: [{ type: 'project.update', id: 'p1', entity: { id: 'p1', name: 'P1-平板改', color: 'green' } }] }) })
+    assert.strictEqual(r1.status, 200)
+    // 两者都保留
+    const st = engine.getState()
+    assert.strictEqual(st.tasks[0].title, 'T1-桌面改')
+    assert.strictEqual(st.tasks[0].priority, 'high')
+    assert.strictEqual(st.projects[0].name, 'P1-平板改')
+    assert.strictEqual(st.projects[0].color, 'green')
+  } finally {
+    await inst.stop()
+  }
+})

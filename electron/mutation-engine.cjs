@@ -27,27 +27,113 @@ const ERROR_CODES = {
 
 const TASK_PRIORITIES = ['high', 'medium', 'low']
 const TASK_STATUSES = ['todo', 'doing', 'done']
-const ENTITY_FIELDS = { task: 'tasks', note: 'notes' }
+const PAPER_STATUSES = ['unread', 'reading', 'read']
+const BIRTHDAY_TYPES = ['lunar', 'solar']
 
 function isNonEmptyString(v) {
   return typeof v === 'string' && v.trim() !== ''
 }
 
-// 实体关键字段校验（宽松：关键字段必须合法；可选字段若提供则必须类型正确）
-// 与 src/types.ts 的 Task / Note 一致，不创建第二套模型。
-function validateEntity(kind, entity) {
-  if (!entity || typeof entity !== 'object' || Array.isArray(entity)) return '实体必须是对象'
-  if (!isNonEmptyString(entity.id)) return '实体缺少合法 id'
-  if (!isNonEmptyString(entity.title)) return '实体缺少合法 title'
-  if (kind === 'task') {
-    if (entity.priority !== undefined && !TASK_PRIORITIES.includes(entity.priority)) return 'priority 非法'
-    if (entity.status !== undefined && !TASK_STATUSES.includes(entity.status)) return 'status 非法'
-    if (entity.subtasks !== undefined && !Array.isArray(entity.subtasks)) return 'subtasks 必须是数组'
+// 实体校验器工厂：宽松（关键字段合法；可选字段若提供则类型正确）。
+// 与 src/types.ts 各实体一致，不创建第二套模型。
+function makeValidator({ idKey = 'id', titleKey = 'title', extra }) {
+  return (e) => {
+    if (!e || typeof e !== 'object' || Array.isArray(e)) return '实体必须是对象'
+    if (!isNonEmptyString(e[idKey])) return '实体缺少合法 id'
+    if (titleKey && !isNonEmptyString(e[titleKey])) return `实体缺少合法 ${titleKey}`
+    if (extra) {
+      const r = extra(e)
+      if (r) return r
+    }
+    return null
   }
-  if (kind === 'note') {
-    if (entity.tags !== undefined && !Array.isArray(entity.tags)) return 'tags 必须是数组'
-  }
-  return null
+}
+
+// 实体配置（Phase 1B-3A：覆盖全部持久化对象实体）
+const ENTITY_CONFIG = {
+  task: {
+    field: 'tasks',
+    validate: makeValidator({
+      extra: (e) => {
+        if (e.priority !== undefined && !TASK_PRIORITIES.includes(e.priority)) return 'priority 非法'
+        if (e.status !== undefined && !TASK_STATUSES.includes(e.status)) return 'status 非法'
+        if (e.subtasks !== undefined && !Array.isArray(e.subtasks)) return 'subtasks 必须是数组'
+        return null
+      },
+    }),
+  },
+  note: {
+    field: 'notes',
+    validate: makeValidator({
+      extra: (e) => (e.tags !== undefined && !Array.isArray(e.tags) ? 'tags 必须是数组' : null),
+    }),
+  },
+  event: {
+    field: 'events',
+    validate: makeValidator({
+      extra: (e) => {
+        if (e.start !== undefined && !isNonEmptyString(e.start)) return 'start 非法'
+        if (e.end !== undefined && !isNonEmptyString(e.end)) return 'end 非法'
+        return null
+      },
+    }),
+  },
+  milestone: {
+    field: 'milestones',
+    validate: makeValidator({
+      extra: (e) => {
+        if (e.progress !== undefined && (typeof e.progress !== 'number' || e.progress < 0 || e.progress > 100)) return 'progress 非法'
+        if (e.checkpoints !== undefined && !Array.isArray(e.checkpoints)) return 'checkpoints 必须是数组'
+        return null
+      },
+    }),
+  },
+  pomodoro: {
+    field: 'pomodoros',
+    validate: makeValidator({
+      titleKey: 'taskTitle',
+      extra: (e) => (e.minutes !== undefined && typeof e.minutes !== 'number' ? 'minutes 非法' : null),
+    }),
+  },
+  birthday: {
+    field: 'birthdays',
+    validate: makeValidator({
+      titleKey: 'name',
+      extra: (e) => (e.calendarType !== undefined && !BIRTHDAY_TYPES.includes(e.calendarType) ? 'calendarType 非法' : null),
+    }),
+  },
+  habit: {
+    field: 'habits',
+    validate: makeValidator({
+      titleKey: 'name',
+      extra: (e) => (e.records !== undefined && !Array.isArray(e.records) ? 'records 必须是数组' : null),
+    }),
+  },
+  project: {
+    field: 'projects',
+    validate: makeValidator({ titleKey: 'name' }),
+  },
+  paper: {
+    field: 'papers',
+    validate: makeValidator({
+      extra: (e) => (e.status !== undefined && !PAPER_STATUSES.includes(e.status) ? 'status 非法' : null),
+    }),
+  },
+}
+
+// 跨实体事务（权威侧原子执行，防 renderer 过期快照覆盖）：
+//   project.delete  → tasks/milestones.projectId 置 undefined
+//   paperStage.delete → papers.stage 重设为 '未分类'
+const CROSS_ENTITY = {
+  project: {
+    refs: [
+      { field: 'tasks', refKey: 'projectId', apply: (e) => ({ ...e, projectId: undefined }) },
+      { field: 'milestones', refKey: 'projectId', apply: (e) => ({ ...e, projectId: undefined }) },
+    ],
+  },
+  paperStage: {
+    refs: [{ field: 'papers', refKey: 'stage', apply: () => ({ stage: '未分类' }) }],
+  },
 }
 
 // 原子写：tmp 文件 + rename（与 lan-server createStorageAccess 相同语义，崩溃/断电不损坏权威文件）
@@ -118,17 +204,46 @@ function createMutationEngine({ storageFile, write, onPersisted }) {
   }
 
   // 应用单条 mutation 到 working state（就地修改）。返回 { ok, error?, id?, entity? }
-  function applyOne(state, m) {
+  // ctx：batch 上下文（跨实体事务保护，见 applyMutations 预扫描）
+  function applyOne(state, m, ctx) {
     const dot = String(m.type).indexOf('.')
     const kind = dot > 0 ? m.type.slice(0, dot) : null
     const op = dot > 0 ? m.type.slice(dot + 1) : null
-    if (kind !== 'task' && kind !== 'note') {
+
+    // paperStages：字符串数组实体（无 id），仅支持整组 replace
+    if (kind === 'paperStages') {
+      if (op !== 'replace') return { ok: false, error: ERROR_CODES.INVALID_MUTATION, detail: 'paperStages 仅支持 replace' }
+      if (!Array.isArray(m.payload) || m.payload.some((x) => typeof x !== 'string')) {
+        return { ok: false, error: ERROR_CODES.VALIDATION_FAILURE, detail: 'paperStages.replace payload 必须是字符串数组' }
+      }
+      state.paperStages = [...m.payload]
+      return { ok: true, type: m.type, id: null, entity: [...m.payload] }
+    }
+
+    // 跨实体事务删除：project.delete / paperStage.delete
+    // 在权威侧原子解引用关联实体（防 renderer 基于过期快照展开覆盖权威）
+    const tx = CROSS_ENTITY[kind]
+    if (tx && op === 'delete') {
+      if (!isNonEmptyString(m.id)) return { ok: false, error: ERROR_CODES.INVALID_MUTATION, detail: 'delete 缺少合法 id' }
+      const field = kind === 'project' ? 'projects' : 'paperStages'
+      const arr = ensureArray(state, field)
+      const idx = arr.findIndex((e) => (kind === 'project' ? e && e.id === m.id : e === m.id))
+      if (idx >= 0) arr.splice(idx, 1)
+      for (const ref of tx.refs) {
+        if (!Array.isArray(state[ref.field])) continue
+        state[ref.field] = state[ref.field].map((e) => (e && e[ref.refKey] === m.id ? { ...e, ...ref.apply(e, m.id) } : e))
+      }
+      return { ok: true, type: m.type, id: m.id, entity: null, deleted: idx >= 0, transactional: true }
+    }
+
+    const cfg = ENTITY_CONFIG[kind]
+    if (!cfg) {
       return { ok: false, error: ERROR_CODES.INVALID_MUTATION, detail: `未知实体类型: ${m.type}` }
     }
     if (op !== 'create' && op !== 'update' && op !== 'delete') {
       return { ok: false, error: ERROR_CODES.INVALID_MUTATION, detail: `未知操作: ${m.type}` }
     }
-    const field = ENTITY_FIELDS[kind]
+    const field = cfg.field
 
     if (op === 'delete') {
       if (!isNonEmptyString(m.id)) return { ok: false, error: ERROR_CODES.INVALID_MUTATION, detail: 'delete 缺少合法 id' }
@@ -144,7 +259,7 @@ function createMutationEngine({ storageFile, write, onPersisted }) {
     if (!entity || typeof entity !== 'object' || Array.isArray(entity)) {
       return { ok: false, error: ERROR_CODES.INVALID_MUTATION, detail: `${m.type} 缺少合法实体` }
     }
-    const err = validateEntity(kind, entity)
+    const err = cfg.validate(entity)
     if (err) return { ok: false, error: ERROR_CODES.VALIDATION_FAILURE, detail: err }
 
     const arr = ensureArray(state, field)
@@ -160,6 +275,21 @@ function createMutationEngine({ storageFile, write, onPersisted }) {
     if (m.id !== entity.id) return { ok: false, error: ERROR_CODES.INVALID_MUTATION, detail: 'update 的 id 与 entity.id 不一致' }
     const idx = arr.findIndex((e) => e && e.id === m.id)
     if (idx < 0) return { ok: false, error: ERROR_CODES.ENTITY_NOT_FOUND, detail: `${field} 中不存在 id=${m.id}` }
+    // 跨实体事务保护：实体属于本 batch 中被删除的 project/paperStage → 跳过该过期 update
+    // （关联解除已由 project.delete/paperStage.delete 在权威侧完成，避免 renderer 过期快照覆盖权威）
+    // 注意：必须查原始权威（ctx.base），因为 working 可能已被本 batch 中先执行的 delete 事务解引用
+    if (ctx && ctx.deletedRefIds && ctx.base) {
+      const baseField = Array.isArray(ctx.base[field]) ? ctx.base[field] : []
+      const baseEntity = baseField.find((e) => e && e.id === m.id)
+      if (baseEntity) {
+        if (ctx.deletedRefIds.get('project') && ctx.deletedRefIds.get('project').has(baseEntity.projectId)) {
+          return { ok: true, type: m.type, id: m.id, entity, skipped: true, reason: 'project-deleted' }
+        }
+        if (ctx.deletedRefIds.get('paperStage') && ctx.deletedRefIds.get('paperStage').has(baseEntity.stage)) {
+          return { ok: true, type: m.type, id: m.id, entity, skipped: true, reason: 'stage-deleted' }
+        }
+      }
+    }
     arr[idx] = entity
     return { ok: true, type: m.type, id: entity.id, entity }
   }
@@ -177,6 +307,19 @@ function createMutationEngine({ storageFile, write, onPersisted }) {
         return { ok: false, error: ERROR_CODES.INVALID_MUTATION, detail: '非法 mutation 结构', failedIndex: i }
       }
     }
+    // 预扫描：本 batch 中被跨实体事务删除的 project / paperStage id
+    // （其关联实体的“仅解引用” update 由事务在权威侧完成，renderer 的过期 update 应跳过）
+    const deletedRefIds = new Map()
+    for (const m of list) {
+      if (m.type === 'project.delete' && isNonEmptyString(m.id)) {
+        if (!deletedRefIds.has('project')) deletedRefIds.set('project', new Set())
+        deletedRefIds.get('project').add(m.id)
+      }
+      if (m.type === 'paperStage.delete' && isNonEmptyString(m.id)) {
+        if (!deletedRefIds.has('paperStage')) deletedRefIds.set('paperStage', new Set())
+        deletedRefIds.get('paperStage').add(m.id)
+      }
+    }
     // 读取权威（L2：总是读盘，correctness 优先）
     const text = readDisk()
     const persisted = parsePersisted(text)
@@ -184,9 +327,11 @@ function createMutationEngine({ storageFile, write, onPersisted }) {
       return { ok: false, error: ERROR_CODES.INTERNAL_ERROR, detail: '权威文件不是合法持久化结构' }
     }
     const working = persisted.state === null ? {} : JSON.parse(JSON.stringify(persisted.state))
+    const base = persisted.state === null ? {} : persisted.state // 原始权威（跨实体事务保护用，只读）
+    const batchCtx = deletedRefIds.size > 0 ? { deletedRefIds, base } : null
     const results = []
     for (let i = 0; i < list.length; i++) {
-      const r = applyOne(working, list[i])
+      const r = applyOne(working, list[i], batchCtx)
       results.push(r)
       if (!r.ok) {
         return { ok: false, error: r.error, failedIndex: i, detail: r.detail || '', results }

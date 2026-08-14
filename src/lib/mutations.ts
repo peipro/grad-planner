@@ -5,7 +5,8 @@
 // 提交逻辑位于 public/sync-adapter.js（IIFE，浏览器脚本）；本模块提供类型 + 失败恢复工具。
 
 import type { Task, Note } from '../types'
-import { useStore, mergePersistedState } from '../store'
+import { useStore, mergePersistedState, repairMilestones } from '../store'
+import type { PlannerState } from '../store'
 
 export type Mutation =
   | { type: 'task.create'; payload: Task }
@@ -28,6 +29,42 @@ export type MutationErrorCode =
 //   persistence_failure → refreshFromAuthority()（磁盘不可写，回权威）
 //   其余错误（invalid/not_found/validation/network/internal）→ 只提示，不刷新整个 state
 export const REFRESH_ON_ERROR: ReadonlySet<string> = new Set(['persistence_failure'])
+
+// ===== Phase 1B-2: State Sync（Main → Renderer 就地更新，替代 reload） =====
+
+// Renderer-only 字段：权威同步时绝不覆盖（§14/§15）
+//   activeView  —— 页面导航，每端独立
+//   pomo        —— 番茄钟运行时状态（running/remaining/swSec/endAt 等），覆盖会打断计时
+//   newsConfig  —— 含 renderer 内存密钥（xKey/xSecret），从权威覆盖会清掉用户输入
+
+/**
+ * State Sync merge：authoritative 持久化字段覆盖 current，renderer-only 字段保留。
+ * 与 mergePersistedState（hydration/导入用，pomo 强制复位）不同：
+ * State Sync 绝不能打断用户正在进行的 UI 状态（番茄钟/页面/密钥）。
+ */
+export function mergeAuthoritativeState(persisted: unknown, current: PlannerState): PlannerState {
+  const p = (persisted || {}) as Partial<PlannerState>
+  return {
+    ...current,
+    ...p,
+    milestones: repairMilestones(p.milestones),
+    // renderer-only 字段保留
+    activeView: current.activeView,
+    pomo: current.pomo,
+    newsConfig: current.newsConfig,
+  }
+}
+
+/**
+ * 应用权威 state 到 Zustand（不 reload、不重新 hydration）。
+ * 防循环：先标记 sync-adapter 权威基准 → 随后的 persist setItem diff 为空 → 不产生 mutation。
+ */
+export function applyAuthoritativeState(state: unknown): void {
+  if (!state || typeof state !== 'object' || Array.isArray(state)) return
+  const sync = (window as any).__gradSyncMarkAuthoritative
+  if (typeof sync === 'function') sync(state)
+  useStore.setState(mergeAuthoritativeState(state, useStore.getState()))
+}
 
 /**
  * 从权威（桌面 IPC / 平板 GET /api/storage）重新拉取 state 并覆盖本地 store。

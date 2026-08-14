@@ -38,6 +38,7 @@
   var pendingMutations = []
   var flushTimer = null
   var FLUSH_MS = 300
+  var pollTimer = null // Phase 1B-2：平板端权威轮询
 
   // 解析 zustand persist 真实 payload：{ state, version }
   function parsePersist(str) {
@@ -195,6 +196,40 @@
   // 页面关闭/刷新前把待写入 mutation 立即发出
   window.addEventListener('pagehide', flush)
   window.addEventListener('beforeunload', flush)
+
+  // Phase 1B-2：Main authoritative state 已应用到 renderer。
+  // 标记基准，使随后的 persist setItem diff 为空 → 不产生 mutation（防 state-sync → persist → mutation 循环）。
+  window.__gradSyncMarkAuthoritative = function (state) {
+    baseState = state || null
+    lastDiffState = state || null
+    pendingMutations = []
+    if (flushTimer) { clearTimeout(flushTimer); flushTimer = null }
+  }
+
+  // Phase 1B-2：平板端轻量轮询权威内容变化（无 Main 推送机制下的最小方案）。
+  // 发现外部变化 → dispatch 'state-sync-external' → renderer 走与 Main state-sync 相同的 apply 路径。
+  if (!isElectron) {
+    var pollText = null
+    var POLL_MS = 5000
+    function pollAuthority() {
+      fetch(STORAGE_PATH, { cache: 'no-store' })
+        .then(function (r) { return r.ok ? r.text() : null })
+        .then(function (text) {
+          if (text == null) return
+          if (pollText !== null && text !== pollText) {
+            var p = parsePersist(text)
+            if (p) {
+              try {
+                window.dispatchEvent(new CustomEvent('state-sync-external', { detail: { state: p.state } }))
+              } catch {}
+            }
+          }
+          pollText = text
+        })
+        .catch(function () {})
+    }
+    pollTimer = setInterval(pollAuthority, POLL_MS)
+  }
 
   function syncGet(key) {
     if (key !== SYNC_KEY) return nativeGet.call(this, key)

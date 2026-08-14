@@ -2,7 +2,7 @@ import { useEffect, useState } from 'react'
 import { Calendar, CheckSquare, GitBranch, FileText, Timer, BarChart2, Settings, Newspaper, Languages, Cake, Flame, Search, BookOpen } from 'lucide-react'
 import { useStore } from './store'
 import { isHttpUrl } from './lib/external'
-import { refreshFromAuthority, REFRESH_ON_ERROR } from './lib/mutations'
+import { refreshFromAuthority, REFRESH_ON_ERROR, applyAuthoritativeState } from './lib/mutations'
 import { useToast } from './lib/toast'
 import CalendarView from './views/CalendarView'
 import TodoView from './views/TodoView'
@@ -67,6 +67,28 @@ export default function App() {
 
   usePomodoroTicker()
   useReminderTicker()
+
+  // Phase 1B-2：State Sync —— 外部变化 → 就地更新 Zustand（绝不 reload / 不重新 hydration）
+  //   Electron：Main 推送（onStateSync）
+  //   平板：轻量轮询 → 'state-sync-external' 事件（sync-adapter 触发）
+  // 两者进入同一个 applyAuthoritativeState 路径（保留 renderer-only state、防 mutation 循环）
+  useEffect(() => {
+    const apply = (state: unknown) => applyAuthoritativeState(state)
+    const api = (window as any).electronAPI
+    let unsub: (() => void) | undefined
+    if (api?.onStateSync) {
+      unsub = api.onStateSync((payload: { state?: unknown }) => apply(payload && payload.state))
+    }
+    const onExternal = (e: Event) => {
+      const detail = (e as CustomEvent<{ state?: unknown }>).detail
+      apply(detail && detail.state)
+    }
+    window.addEventListener('state-sync-external', onExternal)
+    return () => {
+      if (unsub) unsub()
+      window.removeEventListener('state-sync-external', onExternal)
+    }
+  }, [])
 
   // Phase 1B-1：mutation 提交失败分类处理（docs L4）
   //   persistence_failure → 回权威（磁盘不可写）

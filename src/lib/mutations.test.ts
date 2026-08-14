@@ -264,6 +264,52 @@ describe('sync-adapter mutation（真实 {state, version} payload）', () => {
       { type: 'habit.create', payload: hab },
     ])
   })
+
+  // ===== Phase 1B-3A-2：剩余实体 diff（真实 payload） =====
+
+  it('paper 变更 → paper.create / update / delete', async () => {
+    const paper = (id: string, o: Record<string, unknown> = {}) => ({ id, title: `P${id}`, stage: '未分类', category: 'x', status: 'unread' as const, createdAt: 'x', ...o })
+    window.localStorage.setItem(SYNC_KEY, persistStr({ papers: [paper('pa1')], pomo: {} }))
+    await flushAndWait()
+    expect(mockCalls[0]).toEqual([{ type: 'paper.create', payload: paper('pa1') }])
+    mockCalls.length = 0
+    ;(window as any).electronAPI.syncStorageGet = async () => ({ found: true, data: persistStr({ papers: [paper('pa1')], pomo: {} }) })
+    await window.localStorage.getItem(SYNC_KEY)
+    mockCalls.length = 0
+    window.localStorage.setItem(SYNC_KEY, persistStr({ papers: [paper('pa1', { status: 'reading' })], pomo: {} }))
+    await flushAndWait()
+    expect(mockCalls[0]).toEqual([{ type: 'paper.update', id: 'pa1', entity: paper('pa1', { status: 'reading' }) }])
+  })
+
+  it('milestone 变更 → milestone.create（含 checkpoints 变化 → update）', async () => {
+    const ms = (id: string, o: Record<string, unknown> = {}) => ({ id, title: `M${id}`, startDate: 'a', endDate: 'b', progress: 0, color: 'blue', ...o })
+    window.localStorage.setItem(SYNC_KEY, persistStr({ milestones: [ms('m1')], pomo: {} }))
+    await flushAndWait()
+    expect(mockCalls[0]).toEqual([{ type: 'milestone.create', payload: ms('m1') }])
+    mockCalls.length = 0
+    ;(window as any).electronAPI.syncStorageGet = async () => ({ found: true, data: persistStr({ milestones: [ms('m1')], pomo: {} }) })
+    await window.localStorage.getItem(SYNC_KEY)
+    mockCalls.length = 0
+    window.localStorage.setItem(SYNC_KEY, persistStr({ milestones: [ms('m1', { progress: 60, checkpoints: [{ id: 'c1', title: 'cp', done: true }] })], pomo: {} }))
+    await flushAndWait()
+    expect(mockCalls[0]).toEqual([{ type: 'milestone.update', id: 'm1', entity: ms('m1', { progress: 60, checkpoints: [{ id: 'c1', title: 'cp', done: true }] }) }])
+  })
+
+  it('birthday / pomodoro 变更 → 正确 mutation', async () => {
+    const bd = { id: 'b1', name: 'B1', calendarType: 'solar' as const, solarMonth: 1, solarDay: 1, emoji: 'e', createdAt: 'x' }
+    window.localStorage.setItem(SYNC_KEY, persistStr({ birthdays: [bd], pomodoros: [], pomo: {} }))
+    await flushAndWait()
+    expect(mockCalls[0]).toEqual([{ type: 'birthday.create', payload: bd }])
+    mockCalls.length = 0
+    // 删除生日 + 新增番茄钟（多实体一个 batch）
+    const po = { id: 'po1', taskTitle: 'PT', minutes: 25, completedAt: 'c' }
+    window.localStorage.setItem(SYNC_KEY, persistStr({ birthdays: [], pomodoros: [po], pomo: {} }))
+    await flushAndWait()
+    expect(mockCalls[0]).toEqual([
+      { type: 'pomodoro.create', payload: po },
+      { type: 'birthday.delete', id: 'b1' },
+    ])
+  })
 })
 
 describe('mutation 失败分类（L4：不搞一刀切 refresh）', () => {

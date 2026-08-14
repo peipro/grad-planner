@@ -2,6 +2,8 @@ import { useEffect, useState } from 'react'
 import { Calendar, CheckSquare, GitBranch, FileText, Timer, BarChart2, Settings, Newspaper, Languages, Cake, Flame, Search, BookOpen } from 'lucide-react'
 import { useStore } from './store'
 import { isHttpUrl } from './lib/external'
+import { refreshFromAuthority, REFRESH_ON_ERROR } from './lib/mutations'
+import { useToast } from './lib/toast'
 import CalendarView from './views/CalendarView'
 import TodoView from './views/TodoView'
 import MilestoneView from './views/MilestoneView'
@@ -65,6 +67,29 @@ export default function App() {
 
   usePomodoroTicker()
   useReminderTicker()
+
+  // Phase 1B-1：mutation 提交失败分类处理（docs L4）
+  //   persistence_failure → 回权威（磁盘不可写）
+  //   其余错误（invalid/not_found/validation/network/internal）→ 只提示，绝不刷新整个 state
+  //   （避免用户正在编辑 Note 时，一个无关 Task mutation 失败触发整页刷新覆盖编辑内容）
+  useEffect(() => {
+    const onMutationFailed = (e: Event) => {
+      const detail = (e as CustomEvent<{ error?: string }>).detail || {}
+      const err = detail.error || 'network_error'
+      if (REFRESH_ON_ERROR.has(err)) {
+        useToast.getState().show('数据保存失败（磁盘写入错误），已恢复为已保存的数据')
+        refreshFromAuthority()
+      } else if (err === 'network_error') {
+        useToast.getState().show('网络不可用，本次修改未同步（将在下次操作时重新尝试）')
+      } else if (err === 'invalid_mutation' || err === 'validation_failure' || err === 'entity_not_found') {
+        useToast.getState().show('同步失败：本次修改未通过校验，未写入')
+      } else {
+        useToast.getState().show('同步异常，本次修改未同步')
+      }
+    }
+    window.addEventListener('sync-mutation-failed', onMutationFailed)
+    return () => window.removeEventListener('sync-mutation-failed', onMutationFailed)
+  }, [])
 
   // 打开独立置顶翻译小窗（桌面版），Web 模式降级为翻译页面
   const openTranslateWindow = () => {

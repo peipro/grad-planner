@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react'
 import { Calendar, CheckSquare, GitBranch, FileText, Timer, BarChart2, Settings, Newspaper, Languages, Cake, Flame, Search, BookOpen } from 'lucide-react'
 import { useStore } from './store'
 import { isHttpUrl } from './lib/external'
+import { performPrepareFlush } from './lib/reload-flush'
 import CalendarView from './views/CalendarView'
 import TodoView from './views/TodoView'
 import MilestoneView from './views/MilestoneView'
@@ -61,6 +62,19 @@ export default function App() {
     const unsub = useStore.persist.onFinishHydration(() => setHydrated(true))
     setHydrated(useStore.persist.hasHydrated())
     return unsub
+  }, [])
+
+  // Renderer Flush Protocol：主进程 reload 前，提交草稿 + 等待提交队列 + ACK
+  useEffect(() => {
+    const api = (window as any).electronAPI
+    if (api?.onPrepareReload && api?.flushAck) {
+      api.onPrepareReload(() => {
+        performPrepareFlush(api).catch(() => {
+          // 兜底：flush 失败也 ACK，避免主进程等待超时（主进程另有 3s 超时兜底）
+          api.flushAck().catch(() => {})
+        })
+      })
+    }
   }, [])
 
   usePomodoroTicker()

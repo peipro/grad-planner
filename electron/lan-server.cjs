@@ -138,7 +138,8 @@ function originAllowed(req, origin) {
 }
 
 // 创建服务器；返回 { server, storage, start }
-function createLanServer({ webRoot, storageFile, basePort = 8899, token = '' }) {
+// mutationEngine：可选注入（Phase 1B-1）。提供时开放 POST /api/mutations（与 IPC 共用同一实例）。
+function createLanServer({ webRoot, storageFile, basePort = 8899, token = '', mutationEngine = null }) {
   const root = path.resolve(webRoot)
   const storage = createStorageAccess(storageFile)
   let state = { running: false, port: null, error: null }
@@ -163,8 +164,8 @@ function createLanServer({ webRoot, storageFile, basePort = 8899, token = '' }) 
     const method = req.method || 'GET'
     const url = req.url || '/'
 
-    // 数据接口鉴权（静态页面保持开放，仅保护 /api/storage）+ CSRF Origin 校验
-    if (url.startsWith('/api/storage')) {
+    // 数据接口鉴权（静态页面保持开放，仅保护 /api/storage 与 /api/mutations）+ CSRF Origin 校验
+    if (url.startsWith('/api/storage') || url.startsWith('/api/mutations')) {
       if (!authorize(req, tokenRef)) {
         res.writeHead(401, { 'Content-Type': 'text/plain; charset=utf-8' })
         res.end('unauthorized')
@@ -236,6 +237,65 @@ function createLanServer({ webRoot, storageFile, basePort = 8899, token = '' }) 
         } else {
           res.writeHead(500, { 'Content-Type': 'text/plain; charset=utf-8' })
           res.end(r.error || 'write failed')
+        }
+        log(method, url, res.statusCode, req)
+      })
+      return
+    }
+
+    if (method === 'POST' && url.startsWith('/api/mutations')) {
+      const chunks = []
+      let size = 0
+      let tooLarge = false
+      req.on('data', (c) => {
+        if (tooLarge) return
+        size += c.length
+        if (size > MAX_BODY) {
+          tooLarge = true
+          chunks.length = 0
+          res.writeHead(413, { 'Content-Type': 'text/plain; charset=utf-8' })
+          res.end('too large')
+          return
+        }
+        chunks.push(c)
+      })
+      req.on('end', () => {
+        if (tooLarge) return
+        let body = null
+        try {
+          body = JSON.parse(Buffer.concat(chunks).toString('utf-8'))
+        } catch {
+          res.writeHead(400, { 'Content-Type': 'text/plain; charset=utf-8' })
+          res.end('invalid json')
+          log(method, url, res.statusCode, req)
+          return
+        }
+        if (!mutationEngine) {
+          res.writeHead(500, { 'Content-Type': 'text/plain; charset=utf-8' })
+          res.end('mutation engine not available')
+          log(method, url, res.statusCode, req)
+          return
+        }
+        const mutations = body && Array.isArray(body.mutations) ? body.mutations : null
+        if (!mutations) {
+          res.writeHead(400, { 'Content-Type': 'text/plain; charset=utf-8' })
+          res.end('invalid mutations')
+          log(method, url, res.statusCode, req)
+          return
+        }
+        // Phase 1B-1：Tablet → 同一个 Mutation Engine（与 IPC 同进程同实例，单线程串行）
+        const r = mutationEngine.applyMutations(mutations)
+        if (r.ok) {
+          res.writeHead(200, { 'Content-Type': 'application/json; charset=utf-8' })
+          res.end(JSON.stringify({ ok: true, results: r.results }))
+        } else {
+          res.writeHead(400, { 'Content-Type': 'application/json; charset=utf-8' })
+          res.end(JSON.stringify({
+            ok: false,
+            error: r.error || 'mutation failed',
+            detail: r.detail || '',
+            failedIndex: typeof r.failedIndex === 'number' ? r.failedIndex : null,
+          }))
         }
         log(method, url, res.statusCode, req)
       })

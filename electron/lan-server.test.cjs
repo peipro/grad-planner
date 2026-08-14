@@ -4,6 +4,7 @@ const fs = require('fs')
 const os = require('os')
 const path = require('path')
 const { createLanServer, createStorageAccess, resolveWebPath } = require('./lan-server.cjs')
+const { createMutationEngine } = require('./mutation-engine.cjs')
 
 function tmpDir() {
   return fs.mkdtempSync(path.join(os.tmpdir(), 'lan-test-'))
@@ -424,6 +425,159 @@ test('HTTP: 恶意非 http Origin → 403', async () => {
       const r = await fetch(`${base}/api/storage`, { method: 'PUT', headers: { Origin: bad }, body: '{"tasks":[]}' })
       assert.strictEqual(r.status, 403, `Origin=${bad} 应被拒绝`)
     }
+  } finally {
+    await inst.stop()
+  }
+})
+
+// ===== Phase 1B-1: POST /api/mutations（Tablet → 同一个 Mutation Engine） =====
+
+function makeTask(id, overrides = {}) {
+  return {
+    id, title: `Task ${id}`, priority: 'medium', status: 'todo',
+    createdAt: '2026-08-14T00:00:00.000Z', ...overrides,
+  }
+}
+
+function makeNote(id, overrides = {}) {
+  return {
+    id, title: `Note ${id}`, content: 'c', tags: [],
+    createdAt: '2026-08-14T00:00:00.000Z', updatedAt: '2026-08-14T00:00:00.000Z', ...overrides,
+  }
+}
+
+test('HTTP: POST /api/mutations → 200 + results（Tablet task.create）', async () => {
+  const root = tmpDir()
+  fs.writeFileSync(path.join(root, 'index.html'), 'ok')
+  const storageFile = path.join(tmpDir(), 'sync', 'grad.json')
+  const engine = createMutationEngine({ storageFile })
+  const inst = createLanServer({ webRoot: root, storageFile, basePort: 0, mutationEngine: engine })
+  const port = await inst.start()
+  const base = `http://127.0.0.1:${port}`
+  try {
+    const r = await fetch(`${base}/api/mutations`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ mutations: [{ type: 'task.create', payload: makeTask('t1') }] }),
+    })
+    assert.strictEqual(r.status, 200)
+    const j = await r.json()
+    assert.strictEqual(j.ok, true)
+    assert.strictEqual(j.results[0].id, 't1')
+    // 引擎权威 state 与磁盘文件均已更新
+    assert.strictEqual(engine.getState().tasks.length, 1)
+    assert.strictEqual(JSON.parse(fs.readFileSync(storageFile, 'utf-8')).state.tasks.length, 1)
+  } finally {
+    await inst.stop()
+  }
+})
+
+test('HTTP: POST /api/mutations 非法 body / 非法 mutation → 400', async () => {
+  const root = tmpDir()
+  fs.writeFileSync(path.join(root, 'index.html'), 'ok')
+  const storageFile = path.join(tmpDir(), 'sync', 'grad.json')
+  const engine = createMutationEngine({ storageFile })
+  const inst = createLanServer({ webRoot: root, storageFile, basePort: 0, mutationEngine: engine })
+  const port = await inst.start()
+  const base = `http://127.0.0.1:${port}`
+  try {
+    // 非法 JSON
+    let r = await fetch(`${base}/api/mutations`, { method: 'POST', body: 'not-json' })
+    assert.strictEqual(r.status, 400)
+    // 缺 mutations 字段
+    r = await fetch(`${base}/api/mutations`, { method: 'POST', body: '{}' })
+    assert.strictEqual(r.status, 400)
+    // mutations 非数组
+    r = await fetch(`${base}/api/mutations`, { method: 'POST', body: JSON.stringify({ mutations: 'x' }) })
+    assert.strictEqual(r.status, 400)
+    // 未知 mutation 类型 → 400 + error 码
+    r = await fetch(`${base}/api/mutations`, {
+      method: 'POST',
+      body: JSON.stringify({ mutations: [{ type: 'bogus.create', payload: {} }] }),
+    })
+    assert.strictEqual(r.status, 400)
+    const j = await r.json()
+    assert.strictEqual(j.ok, false)
+    assert.strictEqual(j.error, 'invalid_mutation')
+    // 引擎未被污染
+    assert.strictEqual(engine.getState(), null)
+  } finally {
+    await inst.stop()
+  }
+})
+
+test('HTTP: POST /api/mutations 无 token → 401；evil Origin → 403', async () => {
+  const root = tmpDir()
+  fs.writeFileSync(path.join(root, 'index.html'), 'ok')
+  const storageFile = path.join(tmpDir(), 'sync', 'grad.json')
+  const engine = createMutationEngine({ storageFile })
+  const inst = createLanServer({ webRoot: root, storageFile, basePort: 0, token: 'tok123', mutationEngine: engine })
+  const port = await inst.start()
+  const base = `http://127.0.0.1:${port}`
+  const body = JSON.stringify({ mutations: [{ type: 'task.create', payload: makeTask('t1') }] })
+  try {
+    let r = await fetch(`${base}/api/mutations`, { method: 'POST', body })
+    assert.strictEqual(r.status, 401)
+    r = await fetch(`${base}/api/mutations?token=wrong`, { method: 'POST', body })
+    assert.strictEqual(r.status, 401)
+    r = await fetch(`${base}/api/mutations?token=tok123`, { method: 'POST', headers: { Origin: 'http://evil.com' }, body })
+    assert.strictEqual(r.status, 403)
+    // 引擎无写入
+    assert.strictEqual(engine.getState(), null)
+  } finally {
+    await inst.stop()
+  }
+})
+
+test('双通道同一引擎：IPC 直接调用与 HTTP POST 交错 → 两个修改都保留（无 lost update）', async () => {
+  const root = tmpDir()
+  fs.writeFileSync(path.join(root, 'index.html'), 'ok')
+  const storageFile = path.join(tmpDir(), 'sync', 'grad.json')
+  // 模拟 main.cjs：IPC 与 LAN 共用同一个 engine 实例
+  const engine = createMutationEngine({ storageFile })
+  const inst = createLanServer({ webRoot: root, storageFile, basePort: 0, mutationEngine: engine })
+  const port = await inst.start()
+  const base = `http://127.0.0.1:${port}`
+  try {
+    // 桌面端（IPC 路径）：创建 Task A
+    const r1 = engine.applyMutations([{ type: 'task.create', payload: makeTask('A') }])
+    assert.strictEqual(r1.ok, true)
+    // 平板端（HTTP 路径）：创建 Note B
+    const r2 = await fetch(`${base}/api/mutations`, {
+      method: 'POST',
+      body: JSON.stringify({ mutations: [{ type: 'note.create', payload: makeNote('B') }] }),
+    })
+    assert.strictEqual(r2.status, 200)
+    // 桌面端（IPC 路径）再改 Task A
+    const r3 = engine.applyMutations([{ type: 'task.update', id: 'A', entity: makeTask('A', { title: 'A2' }) }])
+    assert.strictEqual(r3.ok, true)
+    // 最终：Task A ✅ Note B ✅（正是 Phase 1B-0 报告 §5 场景 5 的 lost update 场景）
+    const st = engine.getState()
+    assert.deepStrictEqual(st.tasks.map((t) => t.id), ['A'])
+    assert.strictEqual(st.tasks[0].title, 'A2')
+    assert.deepStrictEqual(st.notes.map((n) => n.id), ['B'])
+    // 磁盘与内存一致
+    const disk = JSON.parse(fs.readFileSync(storageFile, 'utf-8')).state
+    assert.deepStrictEqual(disk.tasks.map((t) => t.id), ['A'])
+    assert.deepStrictEqual(disk.notes.map((n) => n.id), ['B'])
+  } finally {
+    await inst.stop()
+  }
+})
+
+test('双通道同一引擎：未注入 mutationEngine 时 POST /api/mutations → 500', async () => {
+  const root = tmpDir()
+  fs.writeFileSync(path.join(root, 'index.html'), 'ok')
+  const storageFile = path.join(tmpDir(), 'sync', 'grad.json')
+  const inst = createLanServer({ webRoot: root, storageFile, basePort: 0 }) // 无 mutationEngine
+  const port = await inst.start()
+  const base = `http://127.0.0.1:${port}`
+  try {
+    const r = await fetch(`${base}/api/mutations`, {
+      method: 'POST',
+      body: JSON.stringify({ mutations: [{ type: 'task.create', payload: makeTask('t1') }] }),
+    })
+    assert.strictEqual(r.status, 500)
   } finally {
     await inst.stop()
   }

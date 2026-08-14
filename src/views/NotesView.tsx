@@ -1,11 +1,12 @@
 import { useMemo, useState } from 'react'
 import { format } from 'date-fns'
-import { Plus, Trash2, FileText, Search, Eye, PencilLine } from 'lucide-react'
+import { Plus, Trash2, FileText, Search, Eye, PencilLine, BookOpen, FolderGit2 } from 'lucide-react'
 import { marked } from 'marked'
 import DOMPurify from 'dompurify'
 import { useStore, uid } from '../store'
 import { Note } from '../types'
 import { useToast } from '../lib/toast'
+import { papersOfNote, projectsOfNote } from '../lib/relations'
 
 marked.setOptions({ gfm: true, breaks: true })
 
@@ -115,6 +116,21 @@ export default function NotesView() {
         <div className="card note-editor">
           {selected ? (
             <>
+              {/* Phase 2A：来源论文 / 所属项目（点击跳转） */}
+              {(papersOfNote(selected.id).length > 0 || projectsOfNote(selected.id).length > 0) && (
+                <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap', paddingBottom: 8, fontSize: 12 }}>
+                  {papersOfNote(selected.id).map((p) => (
+                    <button key={p.id} className="tag-chip" onClick={() => useStore.getState().setView('literature')} title={`文献：${p.title}`}>
+                      <BookOpen size={11} /> {p.title.slice(0, 20)}{p.title.length > 20 ? '…' : ''}
+                    </button>
+                  ))}
+                  {projectsOfNote(selected.id).map((pr) => (
+                    <button key={pr.id} className="tag-chip" onClick={() => useStore.getState().setView('todo')} title={`项目：${pr.name}`}>
+                      <FolderGit2 size={11} /> {pr.name}
+                    </button>
+                  ))}
+                </div>
+              )}
               <input className="note-title-input" value={titleDraft} onChange={(e) => setTitleDraft(e.target.value)} onBlur={persistTitle} />
               <input className="note-tag-input" value={tagsDraft} onChange={(e) => setTagsDraft(e.target.value)} onBlur={persistTags} placeholder="标签，逗号分隔（如：文献, 组会）" />
               <div className="note-mode-tabs">

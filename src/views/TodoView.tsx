@@ -1,6 +1,6 @@
 import { useMemo, useState } from 'react'
 import { format } from 'date-fns'
-import { Plus, Trash2, CheckSquare, Square, Loader, ChevronRight, ChevronDown, PencilLine } from 'lucide-react'
+import { Plus, Trash2, CheckSquare, Square, Loader, ChevronRight, ChevronDown, PencilLine, StickyNote, BookOpen } from 'lucide-react'
 import { useStore, uid, Project } from '../store'
 import { useToast } from '../lib/toast'
 import { parseQuickAdd } from '../lib/natural'
@@ -8,6 +8,12 @@ import { classifyQuadrant, overdueDays } from '../lib/task'
 import { Priority, Task, TaskStatus } from '../types'
 import PromptModal from '../components/PromptModal'
 import DatePicker from '../components/DatePicker'
+import {
+  papersOfProject, notesOfProject,
+  linkPaperProject, unlinkPaperProject,
+  linkNoteProject, unlinkNoteProject,
+  createProjectNote,
+} from '../lib/relations'
 
 const tabs: { id: 'list' | 'quadrant' | 'board'; label: string }[] = [
   { id: 'list', label: '列表' },
@@ -43,6 +49,11 @@ export default function TodoView() {
   const tasks = useStore((s) => s.tasks)
   const projects = useStore((s) => s.projects)
   const milestones = useStore((s) => s.milestones)
+  // Phase 2A：项目关联面板
+  const notes = useStore((s) => s.notes)
+  const papers = useStore((s) => s.papers)
+  const [relPaperAdd, setRelPaperAdd] = useState('')
+  const [relNoteAdd, setRelNoteAdd] = useState('')
   const addTask = useStore((s) => s.addTask)
   const updateTask = useStore((s) => s.updateTask)
   const deleteTask = useStore((s) => s.deleteTask)
@@ -300,6 +311,66 @@ export default function TodoView() {
           </button>
         ))}
       </div>
+
+      {/* Phase 2A：项目关联面板（相关论文 / 相关笔记） */}
+      {activeProject && (() => {
+        const curProject = projects.find((p) => p.id === activeProject)
+        if (!curProject) return null
+        const relPapers = papersOfProject(activeProject)
+        const relNotes = notesOfProject(activeProject)
+        return (
+          <div className="card" style={{ padding: '10px 14px', marginBottom: 12 }}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 8 }}>
+              <span style={{ display: 'inline-block', width: 10, height: 10, borderRadius: 3, background: curProject.color }} />
+              <b style={{ fontSize: 13 }}>{curProject.name}</b>
+              <span style={{ fontSize: 11, color: 'var(--text-3)' }}>相关论文 {relPapers.length} · 相关笔记 {relNotes.length}</span>
+            </div>
+            <div style={{ display: 'flex', gap: 16, flexWrap: 'wrap' }}>
+              <div style={{ flex: '1 1 260px', minWidth: 240 }}>
+                <div style={{ fontSize: 12, fontWeight: 600, color: 'var(--text-2)', marginBottom: 4 }}><BookOpen size={12} /> 相关论文</div>
+                {relPapers.length === 0 && <div style={{ fontSize: 12, color: 'var(--text-3)' }}>暂无</div>}
+                {relPapers.map((p) => (
+                  <div key={p.id} style={{ display: 'flex', alignItems: 'center', gap: 6, padding: '2px 0', fontSize: 12.5 }}>
+                    <span style={{ flex: 1, minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{p.title}</span>
+                    <button className="icon-btn danger" title="解除" onClick={() => unlinkPaperProject(p.id, activeProject)}><Trash2 size={12} /></button>
+                  </div>
+                ))}
+                <div style={{ display: 'flex', gap: 6, marginTop: 4 }}>
+                  <select value={relPaperAdd} onChange={(e) => setRelPaperAdd(e.target.value)} style={{ flex: 1, fontSize: 12 }}>
+                    <option value="">关联论文…</option>
+                    {papers.filter((p) => !relPapers.some((x) => x.id === p.id)).map((p) => (
+                      <option key={p.id} value={p.id}>{p.title.slice(0, 40)}</option>
+                    ))}
+                  </select>
+                  <button className="btn btn-ghost btn-sm" disabled={!relPaperAdd} onClick={() => { linkPaperProject(relPaperAdd, activeProject); setRelPaperAdd('') }}>关联</button>
+                </div>
+              </div>
+              <div style={{ flex: '1 1 260px', minWidth: 240 }}>
+                <div style={{ fontSize: 12, fontWeight: 600, color: 'var(--text-2)', marginBottom: 4 }}><StickyNote size={12} /> 相关笔记</div>
+                {relNotes.length === 0 && <div style={{ fontSize: 12, color: 'var(--text-3)' }}>暂无</div>}
+                {relNotes.map((n) => (
+                  <div key={n.id} style={{ display: 'flex', alignItems: 'center', gap: 6, padding: '2px 0', fontSize: 12.5 }}>
+                    <span style={{ flex: 1, minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{n.title}</span>
+                    <button className="icon-btn danger" title="解除" onClick={() => unlinkNoteProject(n.id, activeProject)}><Trash2 size={12} /></button>
+                  </div>
+                ))}
+                <div style={{ display: 'flex', gap: 6, marginTop: 4 }}>
+                  <button className="btn btn-primary btn-sm" onClick={() => { createProjectNote(curProject); useStore.getState().setView('notes'); setActiveProject(null) }}>
+                    <Plus size={12} /> 创建项目笔记
+                  </button>
+                  <select value={relNoteAdd} onChange={(e) => setRelNoteAdd(e.target.value)} style={{ flex: 1, fontSize: 12 }}>
+                    <option value="">关联已有笔记…</option>
+                    {notes.filter((n) => !relNotes.some((x) => x.id === n.id)).map((n) => (
+                      <option key={n.id} value={n.id}>{n.title.slice(0, 40)}</option>
+                    ))}
+                  </select>
+                  <button className="btn btn-ghost btn-sm" disabled={!relNoteAdd} onClick={() => { linkNoteProject(relNoteAdd, activeProject); setRelNoteAdd('') }}>关联</button>
+                </div>
+              </div>
+            </div>
+          </div>
+        )
+      })()}
 
       <div className="card" style={{ padding: '12px 14px', marginBottom: 16 }}>
         <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>

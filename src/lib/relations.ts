@@ -110,6 +110,29 @@ export function createLiteratureNote(paper: Pick<Paper, 'id' | 'title'>): string
   return id
 }
 
+// 创建项目笔记（一键：创建 Note + 自动关联当前 Project）
+export function createProjectNote(project: Pick<Project, 'id' | 'name'>): string {
+  const id = uid()
+  const now = new Date().toISOString()
+  const s = useStore.getState()
+  useStore.setState({
+    notes: [
+      ...s.notes,
+      {
+        id,
+        title: `${project.name.slice(0, 50)} · 项目笔记`,
+        content: `# ${project.name}\n\n`,
+        tags: ['项目'],
+        projectIds: [project.id],
+        createdAt: now,
+        updatedAt: now,
+      },
+    ],
+    projects: s.projects.map((p) => (p.id === project.id ? { ...p, noteIds: addRef(p.noteIds, id) } : p)),
+  })
+  return id
+}
+
 // ===== 关系查询辅助（含缺失实体防御） =====
 
 export function notesOfPaper(paperId: string): Note[] {

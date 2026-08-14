@@ -1,10 +1,10 @@
 import { useMemo, useState, useEffect, useRef } from 'react'
-import { Search, X, CheckSquare, Calendar, FileText, Cake, GitBranch, CornerDownLeft, BookOpen, Flame } from 'lucide-react'
+import { Search, X, CheckSquare, Calendar, FileText, Cake, GitBranch, CornerDownLeft, BookOpen, Flame , FolderGit2 } from 'lucide-react'
 import { useStore } from '../store'
 
 interface Hit {
   id: string
-  kind: 'task' | 'event' | 'note' | 'paper' | 'milestone' | 'birthday' | 'habit'
+  kind: 'task' | 'event' | 'note' | 'paper' | 'milestone' | 'birthday' | 'habit' | 'project'
   title: string
   subtitle: string
   view: string
@@ -18,6 +18,7 @@ const GROUPS: { kind: Hit['kind']; label: string; icon: typeof CheckSquare; colo
   { kind: 'milestone', label: '里程碑', icon: GitBranch, color: '#f08c00' },
   { kind: 'birthday', label: '生日', icon: Cake, color: '#f472b6' },
   { kind: 'habit', label: '习惯', icon: Flame, color: '#e5484d' },
+  { kind: 'project', label: '项目', icon: FolderGit2, color: '#4f6ef7' },
 ]
 
 const GROUP_ORDER = GROUPS.map((g) => g.kind)
@@ -46,6 +47,7 @@ export default function GlobalSearch({ onClose }: { onClose: () => void }) {
   const birthdays = useStore((s) => s.birthdays)
   const milestones = useStore((s) => s.milestones)
   const papers = useStore((s) => s.papers)
+  const projects = useStore((s) => s.projects)
   const habits = useStore((s) => s.habits)
   const setView = useStore((s) => s.setView)
 
@@ -60,14 +62,27 @@ export default function GlobalSearch({ onClose }: { onClose: () => void }) {
     }
     tasks.forEach((t) => push('task', t.id, t.title, `待办 · ${t.status === 'done' ? '已完成' : t.status === 'doing' ? '进行中' : '待办'}`, 'todo'))
     events.forEach((e) => push('event', e.id, e.title, `日历 · ${e.start.slice(0, 10)}`, 'calendar'))
-    notes.forEach((n) => push('note', n.id, n.title, `笔记${n.tags.length ? ' · ' + n.tags.join(' / ') : ''}`, 'notes'))
-    papers.forEach((p) => push('paper', p.id, p.title, `文献 · ${[p.venue, p.year ? String(p.year) : ''].filter(Boolean).join(' · ') || p.stage}`, 'literature'))
+    notes.forEach((n) => {
+      // Phase 2A：笔记显示关系上下文（来源论文 / 所属项目）
+      const srcPapers = papers.filter((p) => (p.noteIds || []).includes(n.id)).map((p) => p.title)
+      const srcProjects = projects.filter((pr) => (pr.noteIds || []).includes(n.id)).map((pr) => pr.name)
+      const ctx = [...srcPapers.slice(0, 2), ...srcProjects.slice(0, 2)].join(' · ')
+      push('note', n.id, n.title, `笔记${n.tags.length ? ' · ' + n.tags.join(' / ') : ''}${ctx ? ' · 来源：' + ctx : ''}`, 'notes')
+    })
+    papers.forEach((p) => {
+      const relProjects = projects.filter((pr) => (pr.paperIds || []).includes(p.id)).map((pr) => pr.name)
+      const relNotes = notes.filter((n) => (n.paperIds || []).includes(p.id)).length
+      const ctx = relProjects.length ? ` · 项目：${relProjects.slice(0, 2).join(' / ')}` : ''
+      const noteCtx = relNotes ? ` · 笔记 ${relNotes} 篇` : ''
+      push('paper', p.id, p.title, `文献 · ${[p.venue, p.year ? String(p.year) : ''].filter(Boolean).join(' · ') || p.stage}${ctx}${noteCtx}`, 'literature')
+    })
+    projects.forEach((pr) => push('project', pr.id, pr.name, `项目 · 论文 ${(pr.paperIds || []).length} · 笔记 ${(pr.noteIds || []).length}`, 'todo'))
     milestones.forEach((m) => push('milestone', m.id, m.title, `里程碑 · ${m.endDate}`, 'milestone'))
     birthdays.forEach((b) => push('birthday', b.id, `${b.emoji} ${b.name}`, '生日', 'birthday'))
     habits.forEach((h) => push('habit', h.id, `${h.emoji} ${h.name}`, '习惯', 'habit'))
     out.sort((a, b) => GROUP_ORDER.indexOf(a.kind) - GROUP_ORDER.indexOf(b.kind))
     return out.slice(0, 30)
-  }, [q, tasks, events, notes, papers, milestones, birthdays, habits])
+  }, [q, tasks, events, notes, papers, milestones, birthdays, habits, projects])
 
   const go = (h: Hit) => {
     setView(h.view)

@@ -10,6 +10,7 @@ const { createCredentialsStore } = require('./credentials-store.cjs')
 const { isAllowedExternalUrl } = require('./url-security.cjs')
 const { CSP } = require('./csp.cjs')
 const { applySubmit, emptyEnvelope } = require('./sync-merge.cjs')
+const { classifyWatchEvent } = require('./sync-watch.cjs')
 
 // 读取 storage envelope（sync-core.js 为 ESM/UMD，经动态 import 获取，见 sync-merge.cjs 说明）
 let _syncCore = null
@@ -284,9 +285,11 @@ function scheduleNewsFetch() {
 let syncStorage = null
 let syncWatcher = null
 let syncNotifyTimer = null
-let lastDesktopWrite = 0
 let lanPort = null
 let lanInstance = null
+
+// 自己最近一次写盘的 writeId（fs.watch 来源判断：自己的写跳过，防同步循环）
+let lastWrittenWriteId = null
 
 // ===== Renderer Flush Protocol（Task 1） =====
 // 外部写入触发 reload 前，必须让 renderer 提交未 blur 的草稿（onBlur 尚未触发的内容），
@@ -326,8 +329,16 @@ function prepareAndReload() {
 // 见 electron/sync-manager.cjs 的时序语义与测试
 const syncManager = createSyncManager({
   write: (data) => {
-    lastDesktopWrite = Date.now()
-    try { syncStorage && syncStorage.write(data) } catch (e) { console.error('[sync] flush write failed:', e) }
+    try {
+      syncStorage && syncStorage.write(data)
+      // 记录本次写盘的 writeId（envelope 中），供 fs.watch 识别自己的写入（Phase 1B Task 6）
+      try {
+        const env = JSON.parse(data)
+        if (env && typeof env.writeId === 'string') lastWrittenWriteId = env.writeId
+      } catch {}
+    } catch (e) {
+      console.error('[sync] flush write failed:', e)
+    }
   },
   reload: reloadRenderers,
 })
@@ -424,7 +435,6 @@ function startLanAccess() {
   ipcMain.handle('sync-storage-remove', () => {
     syncManager.clear()
     currentEnvelopeText = null
-    lastDesktopWrite = Date.now()
     return syncStorage.remove()
   })
   ipcMain.handle('lan-port', () => lanPort)
@@ -444,14 +454,22 @@ function startLanAccess() {
     lastReloadHash = storageHash()
     syncWatcher = fs.watch(path.dirname(storageFile), { persistent: false }, (evt, name) => {
       if (name && name.endsWith('grad-planner-storage.json')) {
-        if (Date.now() - lastDesktopWrite < 800) return // 桌面端自己的写入，跳过
         clearTimeout(syncNotifyTimer)
-        // 内容哈希校验：文件内容未变化时不刷新，避免无意义的整页重载
+        // 短 debounce（仅降频，非来源判断）：合并同一瞬间的多次文件事件
         syncNotifyTimer = setTimeout(() => {
+          // 写入来源判断：读取文件 envelope 的 writeId，自己的写盘直接跳过（不再依赖时间窗口）
+          let fileText = null
+          try {
+            fileText = fs.readFileSync(storageFile, 'utf-8')
+          } catch {}
+          const cls = classifyWatchEvent({ fileText, lastWrittenWriteId })
+          if (!cls.external) return
+
           const h = storageHash()
           if (h === null || h === lastReloadHash) return
           lastReloadHash = h
-          // reload 前先落盘桌面端 pending 数据 + renderer 草稿（flush 协议），避免刷新丢数据
+          // 外部写入：更新内存 envelope 为最新文件内容，然后走 flush 协议 reload
+          currentEnvelopeText = fileText
           prepareAndReload()
         }, 300)
       }

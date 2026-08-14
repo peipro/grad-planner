@@ -65,8 +65,14 @@
     { field: 'papers', kind: 'paper' },
   ]
 
+  // 实体版本（Phase 1B-3B）：baseState 中的 version 即“客户端修改前同步到的版本”（§19 来自真实权威）
+  function entityVersionOf(e) {
+    return e && typeof e.version === 'number' ? e.version : 1
+  }
+
   // diff：base vs next → Mutation[]（表驱动覆盖全部对象实体 + paperStages）
   // create / update（全量 entity）/ delete，与 electron/mutation-engine.cjs 的契约一致。
+  // update/delete 携带 baseVersion（来自 baseState 的实体版本）。
   function diffMutations(base, next) {
     var out = []
     for (var f = 0; f < ENTITY_FIELDS.length; f++) {
@@ -86,10 +92,12 @@
       }
       for (var id in nextMap) {
         if (!(id in prev)) out.push({ type: kind + '.create', payload: nextMap[id] })
-        else if (JSON.stringify(prev[id]) !== JSON.stringify(nextMap[id])) out.push({ type: kind + '.update', id: id, entity: nextMap[id] })
+        else if (JSON.stringify(prev[id]) !== JSON.stringify(nextMap[id])) {
+          out.push({ type: kind + '.update', id: id, entity: nextMap[id], baseVersion: entityVersionOf(prev[id]) })
+        }
       }
       for (var id2 in prev) {
-        if (!(id2 in nextMap)) out.push({ type: kind + '.delete', id: id2 })
+        if (!(id2 in nextMap)) out.push({ type: kind + '.delete', id: id2, baseVersion: entityVersionOf(prev[id2]) })
       }
     }
     // paperStages：字符串数组（无 id），内容变化 → 整组 replace

@@ -113,7 +113,7 @@ describe('sync-adapter mutation（真实 {state, version} payload）', () => {
     window.localStorage.setItem(SYNC_KEY, persistStr(next))
     await flushAndWait()
     expect(mockCalls[0]).toEqual([
-      { type: 'task.update', id: 't1', entity: makeTask('t1', { title: 'T1 updated' }) },
+      { type: 'task.update', id: 't1', entity: makeTask('t1', { title: 'T1 updated' }), baseVersion: 1 },
     ])
   })
 
@@ -127,7 +127,7 @@ describe('sync-adapter mutation（真实 {state, version} payload）', () => {
     const next = { tasks: [], notes: [], pomo: {} }
     window.localStorage.setItem(SYNC_KEY, persistStr(next))
     await flushAndWait()
-    expect(mockCalls[0]).toEqual([{ type: 'task.delete', id: 't1' }])
+    expect(mockCalls[0]).toEqual([{ type: 'task.delete', id: 't1', baseVersion: 1 }])
   })
 
   it('note.create / note.update / note.delete 同样成立', async () => {
@@ -142,14 +142,14 @@ describe('sync-adapter mutation（真实 {state, version} payload）', () => {
     window.localStorage.setItem(SYNC_KEY, persistStr(next2))
     await flushAndWait()
     expect(mockCalls[0]).toEqual([
-      { type: 'note.update', id: 'n1', entity: makeNote('n1', { content: 'changed' }) },
+      { type: 'note.update', id: 'n1', entity: makeNote('n1', { content: 'changed' }), baseVersion: 1 },
     ])
     mockCalls.length = 0
     // delete
     const next3 = { tasks: [], notes: [], pomo: {} }
     window.localStorage.setItem(SYNC_KEY, persistStr(next3))
     await flushAndWait()
-    expect(mockCalls[0]).toEqual([{ type: 'note.delete', id: 'n1' }])
+    expect(mockCalls[0]).toEqual([{ type: 'note.delete', id: 'n1', baseVersion: 1 }])
   })
 
   it('连续 setItem 合并：提交只保留最新全量 diff（不重复提交）', async () => {
@@ -198,7 +198,7 @@ describe('sync-adapter mutation（真实 {state, version} payload）', () => {
     window.localStorage.setItem(SYNC_KEY, persistStr(next))
     await flushAndWait()
     expect(mockCalls[0]).toEqual([
-      { type: 'task.update', id: 't1', entity: makeTask('t1', { title: 'v2' }) },
+      { type: 'task.update', id: 't1', entity: makeTask('t1', { title: 'v2' }), baseVersion: 1 },
     ])
   })
 
@@ -219,12 +219,12 @@ describe('sync-adapter mutation（真实 {state, version} payload）', () => {
     mockCalls.length = 0
     window.localStorage.setItem(SYNC_KEY, persistStr({ events: [ev('e1', { title: 'E1 改了' })], pomo: {} }))
     await flushAndWait()
-    expect(mockCalls[0]).toEqual([{ type: 'event.update', id: 'e1', entity: ev('e1', { title: 'E1 改了' }) }])
+    expect(mockCalls[0]).toEqual([{ type: 'event.update', id: 'e1', entity: ev('e1', { title: 'E1 改了' }), baseVersion: 1 }])
     mockCalls.length = 0
     // delete
     window.localStorage.setItem(SYNC_KEY, persistStr({ events: [], pomo: {} }))
     await flushAndWait()
-    expect(mockCalls[0]).toEqual([{ type: 'event.delete', id: 'e1' }])
+    expect(mockCalls[0]).toEqual([{ type: 'event.delete', id: 'e1', baseVersion: 1 }])
   })
 
   it('project 变更 → project.create；含关联 task 的 project.delete → project.delete + task.update（engine 侧事务保护）', async () => {
@@ -242,8 +242,8 @@ describe('sync-adapter mutation（真实 {state, version} payload）', () => {
     // diff 生成 project.delete + task.update（task 仅 projectId 变化）
     // engine 预扫描 project.delete → 该 task 的过期 update 被跳过（权威侧解引用）
     expect(mockCalls[0]).toEqual([
-      { type: 'task.update', id: 't1', entity: task('t1', undefined) },
-      { type: 'project.delete', id: 'p1' },
+      { type: 'task.update', id: 't1', entity: task('t1', undefined), baseVersion: 1 },
+      { type: 'project.delete', id: 'p1', baseVersion: 1 },
     ])
   })
 
@@ -278,7 +278,7 @@ describe('sync-adapter mutation（真实 {state, version} payload）', () => {
     mockCalls.length = 0
     window.localStorage.setItem(SYNC_KEY, persistStr({ papers: [paper('pa1', { status: 'reading' })], pomo: {} }))
     await flushAndWait()
-    expect(mockCalls[0]).toEqual([{ type: 'paper.update', id: 'pa1', entity: paper('pa1', { status: 'reading' }) }])
+    expect(mockCalls[0]).toEqual([{ type: 'paper.update', id: 'pa1', entity: paper('pa1', { status: 'reading' }), baseVersion: 1 }])
   })
 
   it('milestone 变更 → milestone.create（含 checkpoints 变化 → update）', async () => {
@@ -292,7 +292,7 @@ describe('sync-adapter mutation（真实 {state, version} payload）', () => {
     mockCalls.length = 0
     window.localStorage.setItem(SYNC_KEY, persistStr({ milestones: [ms('m1', { progress: 60, checkpoints: [{ id: 'c1', title: 'cp', done: true }] })], pomo: {} }))
     await flushAndWait()
-    expect(mockCalls[0]).toEqual([{ type: 'milestone.update', id: 'm1', entity: ms('m1', { progress: 60, checkpoints: [{ id: 'c1', title: 'cp', done: true }] }) }])
+    expect(mockCalls[0]).toEqual([{ type: 'milestone.update', id: 'm1', entity: ms('m1', { progress: 60, checkpoints: [{ id: 'c1', title: 'cp', done: true }] }), baseVersion: 1 }])
   })
 
   it('birthday / pomodoro 变更 → 正确 mutation', async () => {
@@ -307,7 +307,7 @@ describe('sync-adapter mutation（真实 {state, version} payload）', () => {
     await flushAndWait()
     expect(mockCalls[0]).toEqual([
       { type: 'pomodoro.create', payload: po },
-      { type: 'birthday.delete', id: 'b1' },
+      { type: 'birthday.delete', id: 'b1', baseVersion: 1 },
     ])
   })
 })

@@ -38,7 +38,7 @@ export default function SettingsView() {
   const [xConfigured, setXConfigured] = useState(false)
   const toast = useToast((s) => s.show)
   const [lanInfo, setLanInfo] = useState<{ port: number | null; token: string; addresses: string[] } | null>(null)
-  const [lanCopied, setLanCopied] = useState(false)
+  const [lanCopiedIdx, setLanCopiedIdx] = useState<number | null>(null)
 
   useEffect(() => {
     const api = (window as any).electronAPI
@@ -55,16 +55,17 @@ export default function SettingsView() {
     }
   }, [])
 
-  const lanUrl = lanInfo && lanInfo.port && lanInfo.addresses.length > 0
-    ? `http://${lanInfo.addresses[0]}:${lanInfo.port}/?token=${lanInfo.token}`
-    : null
+  // Phase 1C Task 1：展示排序后最可达的 LAN 地址（首个为主地址，其余作为备选列表）
+  const lanUrls = lanInfo && lanInfo.port && lanInfo.addresses.length > 0
+    ? lanInfo.addresses.map((a) => `http://${a}:${lanInfo.port}/?token=${lanInfo.token}`)
+    : []
 
-  const copyLan = () => {
-    if (!lanUrl) return
-    navigator.clipboard.writeText(lanUrl).then(() => {
-      setLanCopied(true)
+  const copyLan = (idx: number) => {
+    if (!lanUrls[idx]) return
+    navigator.clipboard.writeText(lanUrls[idx]).then(() => {
+      setLanCopiedIdx(idx)
       toast('已复制局域网访问地址')
-      setTimeout(() => setLanCopied(false), 2000)
+      setTimeout(() => setLanCopiedIdx(null), 2000)
     }).catch(() => {})
   }
 
@@ -282,16 +283,25 @@ export default function SettingsView() {
 
         <div className="card setting-card">
           <div className="setting-title"><Wifi size={15} /> 局域网共享</div>
-          {lanInfo && lanInfo.port ? (
+          {lanInfo && lanInfo.port && lanUrls.length > 0 ? (
             <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
               <div style={{ fontSize: 12, color: 'var(--text-2)', lineHeight: 1.7 }}>
                 平板 / 手机浏览器（同一局域网）打开下面地址，即可与桌面端共享同一份数据：
               </div>
-              <div style={{ fontSize: 11.5, fontFamily: 'monospace', wordBreak: 'break-all', padding: '8px 10px', background: 'var(--bg-hover)', borderRadius: 8, color: 'var(--accent-text)' }}>
-                {lanUrl}
-              </div>
+              {lanUrls.map((u, i) => (
+                <div key={u} style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+                  <div style={{ flex: 1, fontSize: 11.5, fontFamily: 'monospace', wordBreak: 'break-all', padding: '8px 10px', background: 'var(--bg-hover)', borderRadius: 8, color: 'var(--accent-text)' }}>
+                    {u}
+                  </div>
+                  <button className="btn btn-ghost btn-sm" onClick={() => copyLan(i)} style={{ whiteSpace: 'nowrap' }}>
+                    <Copy size={13} /> {lanCopiedIdx === i ? '已复制' : '复制'}
+                  </button>
+                </div>
+              ))}
+              {lanUrls.length > 1 && (
+                <div style={{ fontSize: 11, color: 'var(--text-3)' }}>检测到多个网络地址，请选择与平板处于同一网络的地址</div>
+              )}
               <div style={{ display: 'flex', gap: 8 }}>
-                <button className="btn btn-ghost btn-sm" onClick={copyLan}><Copy size={13} /> {lanCopied ? '已复制' : '复制地址'}</button>
                 <button className="btn btn-ghost btn-sm" onClick={resetLanToken}><KeyRound size={13} /> 重置令牌</button>
               </div>
               <div style={{ fontSize: 11, color: 'var(--text-3)' }}>重置令牌后已连接的设备会立即失效，需用新地址重新打开</div>

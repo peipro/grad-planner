@@ -89,18 +89,52 @@ function resolveWebPath(webRoot, urlPath) {
   return { file: fp, isDir: false }
 }
 
-// 收集本机局域网 IPv4 地址（供提示用）
-function lanAddresses() {
+// 明显不可达的虚拟网卡接口名（Clash/VPN/VM/Hyper-V/WSL/Docker/隧道）
+const VIRTUAL_IFACE_RE = /(clash|vmware|vmnet|vbox|virtualbox|vethernet|hyper-v|wsl|docker|tailscale|zerotier|tun|tap|loopback|isatap|teredo|nordvpn|openvpn|wireguard)/i
+// Clash 等代理工具使用的 benchmark 保留段（198.18.0.0/15），不可作为 LAN 访问地址
+const BENCHMARK_RE = /^198\.(1[89]|2[0-9]|3[01])\./
+// 私网段排名：192.168 最常见 → 10.x → 172.16-31 → 其他
+function privateRank(addr) {
+  if (/^192\.168\./.test(addr)) return 0
+  if (/^10\./.test(addr)) return 1
+  if (/^172\.(1[6-9]|2[0-9]|3[01])\./.test(addr)) return 2
+  return 3
+}
+
+// 纯函数：过滤不可达地址 + 按可达性排序（可测）
+// entries: os.networkInterfaces() 原始返回
+function rankLanAddresses(nets) {
   const out = []
-  const nets = os.networkInterfaces()
-  for (const name of Object.keys(nets)) {
+  for (const name of Object.keys(nets || {})) {
     for (const ni of nets[name] || []) {
       if (ni.family !== 'IPv4' || ni.internal) continue
+      if (ni.address === '0.0.0.0' || ni.address.startsWith('0.')) continue // bind 地址，不可 advertised
       if (ni.address.startsWith('169.254.')) continue // APIPA
+      if (VIRTUAL_IFACE_RE.test(name)) continue // 虚拟网卡
+      if (BENCHMARK_RE.test(ni.address)) continue // 代理 benchmark 段
       out.push({ name, address: ni.address })
     }
   }
+  out.sort((a, b) => privateRank(a.address) - privateRank(b.address))
   return out
+}
+
+// 收集本机局域网 IPv4 地址（供提示用）；过滤虚拟网卡，物理私网优先
+function lanAddresses() {
+  const filtered = rankLanAddresses(os.networkInterfaces())
+  // fallback：若过滤后为空（极端虚拟化环境），退回不过滤，避免完全没有可展示地址
+  if (filtered.length === 0) {
+    const raw = []
+    const nets = os.networkInterfaces()
+    for (const name of Object.keys(nets)) {
+      for (const ni of nets[name] || []) {
+        if (ni.family !== 'IPv4' || ni.internal) continue
+        raw.push({ name, address: ni.address })
+      }
+    }
+    return raw
+  }
+  return filtered
 }
 
 // 鉴权：配置了 token 时必须匹配 query(?token=)或 Authorization 头，否则拒绝
@@ -402,4 +436,4 @@ async function startLanServer(opts, onReady) {
   }
 }
 
-module.exports = { createLanServer, startLanServer, createStorageAccess, lanAddresses, resolveWebPath }
+module.exports = { createLanServer, startLanServer, createStorageAccess, lanAddresses, resolveWebPath, rankLanAddresses }

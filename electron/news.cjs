@@ -600,4 +600,4 @@ async function translateText(text, target = 'zh-CN') {
   return { ok: true, content: translated.join('') }
 }
 
-module.exports = { fetchAllNews, RSS_SOURCES, fetchArticle, translateText }
+module.exports = { fetchAllNews, RSS_SOURCES, fetchArticle, translateText, extractArticleText }

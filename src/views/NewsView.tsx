@@ -134,23 +134,65 @@ export default function NewsView() {
 
   const saveAsNote = async (it: NewsItem) => {
     const zhTitle = await translateIfNeeded(it.title)
-    const zhSummary = await translateIfNeeded(it.summary || '')
     const title = zhTitle.slice(0, 80)
     const meta = [it.source, it.pubTime && formatTime(it.pubTime)].filter(Boolean).join(' · ')
-    const parts: string[] = []
-    if (zhSummary) parts.push(`摘要：${zhSummary}`)
-    if (zhTitle !== it.title) parts.push(`原文标题：${it.title}`)
-    if (it.summary && zhSummary !== it.summary) parts.push(`原文摘要：${it.summary}`)
-    parts.push(`来源：${meta}`, `原文链接：${it.link}`)
+
+    // Phase 1C Task 3：优先抓取原文正文；失败时明确告知并退化为摘要版
+    let body = ''
+    let bodyFailed = false
+    const api = (window as any).electronAPI
+    if (api?.fetchArticle && it.link) {
+      try {
+        const res = await api.fetchArticle(it.link)
+        if (res?.ok && res.content && res.content.trim()) body = res.content.trim()
+        else bodyFailed = true
+      } catch {
+        bodyFailed = true
+      }
+    }
+
+    let content: string
+    if (body) {
+      content = [
+        `# ${title}`,
+        '',
+        `> 来源：${it.source}${it.pubTime ? `  ·  发布时间：${formatTime(it.pubTime)}` : ''}`,
+        `> 原文：${it.link}`,
+        '',
+        '---',
+        '',
+        '## 正文',
+        '',
+        body,
+        '',
+        '---',
+        '',
+        '## 我的笔记',
+        '',
+      ].join('\n')
+    } else {
+      // 无法获取正文：保存摘要，并明确告知用户保存内容类型
+      const zhSummary = await translateIfNeeded(it.summary || '')
+      const parts: string[] = []
+      if (zhSummary) parts.push(`摘要：${zhSummary}`)
+      if (zhTitle !== it.title) parts.push(`原文标题：${it.title}`)
+      if (it.summary && zhSummary !== it.summary) parts.push(`原文摘要：${it.summary}`)
+      parts.push(`来源：${meta}`, `原文链接：${it.link}`)
+      content = parts.join('\n\n')
+      if (bodyFailed) {
+        alert('无法获取原文正文（内容可能已下架或需登录）。\n\n已保存【摘要版本】，可稍后重试或打开原文链接查看。')
+      }
+    }
+
     addNote({
       id: uid(),
       title,
-      content: parts.join('\n\n'),
+      content,
       tags: ['资讯'],
       createdAt: new Date().toISOString(),
       updatedAt: new Date().toISOString(),
     })
-    toast(`已存为笔记「${title.slice(0, 18)}${title.length > 18 ? '…' : ''}」`, {
+    toast(`已存为笔记「${title.slice(0, 18)}${title.length > 18 ? '…' : ''}」${body ? '' : '（摘要版）'}`, {
       actionLabel: '查看',
       onAction: () => gotoView('notes'),
     })

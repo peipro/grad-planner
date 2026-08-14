@@ -7,6 +7,7 @@ export interface CalEvent {
   end: string
   type: EventType
   note?: string
+  version?: number
 }
 
 export type Priority = 'high' | 'medium' | 'low'
@@ -27,6 +28,7 @@ export interface Task {
   projectId?: string
   subtasks?: Subtask[]
   createdAt: string
+  version?: number
 }
 
 export interface MilestoneCheckpoint {
@@ -45,6 +47,7 @@ export interface Milestone {
   color: string
   projectId?: string
   checkpoints?: MilestoneCheckpoint[]
+  version?: number
 }
 
 export interface Note {
@@ -54,6 +57,7 @@ export interface Note {
   tags: string[]
   createdAt: string
   updatedAt: string
+  version?: number
 }
 
 export interface PomodoroRecord {
@@ -62,6 +66,7 @@ export interface PomodoroRecord {
   minutes: number
   completedAt: string
   taskId?: string
+  version?: number
 }
 
 export interface Habit {
@@ -71,6 +76,7 @@ export interface Habit {
   weeklyTarget: number
   records: string[]
   createdAt: string
+  version?: number
 }
 
 export interface Birthday {
@@ -86,6 +92,7 @@ export interface Birthday {
   emoji: string
   originalInput?: string
   createdAt: string
+  version?: number
 }
 
 export interface ThemeMode {
@@ -109,6 +116,7 @@ export interface Paper {
   link?: string
   focus?: 'core' | 'skim'
   createdAt: string
+  version?: number
 }
 
 export interface NewsItem {

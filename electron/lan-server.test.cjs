@@ -309,3 +309,122 @@ test('HTTP: 并发 PUT（多客户端同时写入）不互相损坏，最后一�
     await inst.stop()
   }
 })
+
+// ===== Task 5: LAN Origin / CSRF 防护（写操作跨站防护，不破坏合法同步） =====
+
+test('HTTP: 合法请求（无 Origin，如 curl/CLI）不受影响', async () => {
+  const root = tmpDir()
+  fs.writeFileSync(path.join(root, 'index.html'), 'ok')
+  const storageFile = path.join(tmpDir(), 'sync', 'grad.json')
+  const inst = createLanServer({ webRoot: root, storageFile, basePort: 0 })
+  const port = await inst.start()
+  const base = `http://127.0.0.1:${port}`
+  try {
+    // GET 无 Origin
+    let r = await fetch(`${base}/api/storage`)
+    assert.strictEqual(r.status, 404)
+    // PUT 无 Origin（curl / CLI 场景）
+    r = await fetch(`${base}/api/storage`, { method: 'PUT', body: '{"tasks":[]}' })
+    assert.strictEqual(r.status, 200)
+    // DELETE 无 Origin
+    r = await fetch(`${base}/api/storage`, { method: 'DELETE' })
+    assert.strictEqual(r.status, 200)
+  } finally {
+    await inst.stop()
+  }
+})
+
+test('HTTP: 合法平板同步（自身 Origin）不受影响', async () => {
+  const root = tmpDir()
+  fs.writeFileSync(path.join(root, 'index.html'), 'ok')
+  const storageFile = path.join(tmpDir(), 'sync', 'grad.json')
+  const inst = createLanServer({ webRoot: root, storageFile, basePort: 0 })
+  const port = await inst.start()
+  const base = `http://127.0.0.1:${port}`
+  const selfOrigin = base // http://127.0.0.1:port
+  try {
+    // GET
+    let r = await fetch(`${base}/api/storage`, { headers: { Origin: selfOrigin } })
+    assert.strictEqual(r.status, 404)
+    // PUT
+    r = await fetch(`${base}/api/storage`, { method: 'PUT', headers: { Origin: selfOrigin }, body: '{"events":[]}' })
+    assert.strictEqual(r.status, 200)
+    // GET 回读
+    r = await fetch(`${base}/api/storage`)
+    assert.strictEqual(await r.text(), '{"events":[]}')
+    // DELETE
+    r = await fetch(`${base}/api/storage`, { method: 'DELETE', headers: { Origin: selfOrigin } })
+    assert.strictEqual(r.status, 200)
+  } finally {
+    await inst.stop()
+  }
+})
+
+test('HTTP: localhost 本机变体 Origin 允许', async () => {
+  const root = tmpDir()
+  fs.writeFileSync(path.join(root, 'index.html'), 'ok')
+  const storageFile = path.join(tmpDir(), 'sync', 'grad.json')
+  const inst = createLanServer({ webRoot: root, storageFile, basePort: 0 })
+  const port = await inst.start()
+  try {
+    const r = await fetch(`http://127.0.0.1:${port}/api/storage`, { method: 'PUT', headers: { Origin: `http://localhost:${port}` }, body: '{"tasks":[]}' })
+    assert.strictEqual(r.status, 200)
+  } finally {
+    await inst.stop()
+  }
+})
+
+test('HTTP: 恶意跨站 PUT（evil Origin）→ 403 且不写盘', async () => {
+  const root = tmpDir()
+  fs.writeFileSync(path.join(root, 'index.html'), 'ok')
+  const storageFile = path.join(tmpDir(), 'sync', 'grad.json')
+  const inst = createLanServer({ webRoot: root, storageFile, basePort: 0 })
+  const port = await inst.start()
+  const base = `http://127.0.0.1:${port}`
+  try {
+    let r = await fetch(`${base}/api/storage`, { method: 'PUT', headers: { Origin: 'http://evil.com' }, body: '{"tasks":[{"id":"evil"}]}' })
+    assert.strictEqual(r.status, 403)
+    // 原文件未被写入
+    r = await fetch(`${base}/api/storage`)
+    assert.strictEqual(r.status, 404, '恶意跨站 PUT 不得写盘')
+  } finally {
+    await inst.stop()
+  }
+})
+
+test('HTTP: 恶意跨站 DELETE（evil Origin）→ 403', async () => {
+  const root = tmpDir()
+  fs.writeFileSync(path.join(root, 'index.html'), 'ok')
+  const storageFile = path.join(tmpDir(), 'sync', 'grad.json')
+  const inst = createLanServer({ webRoot: root, storageFile, basePort: 0 })
+  const port = await inst.start()
+  const base = `http://127.0.0.1:${port}`
+  try {
+    // 先写入合法数据
+    await fetch(`${base}/api/storage`, { method: 'PUT', body: '{"tasks":[]}' })
+    const r = await fetch(`${base}/api/storage`, { method: 'DELETE', headers: { Origin: 'http://evil.com' } })
+    assert.strictEqual(r.status, 403)
+    // 数据未被删除
+    const r2 = await fetch(`${base}/api/storage`)
+    assert.strictEqual(r2.status, 200, '恶意跨站 DELETE 不得删除数据')
+  } finally {
+    await inst.stop()
+  }
+})
+
+test('HTTP: 恶意非 http Origin → 403', async () => {
+  const root = tmpDir()
+  fs.writeFileSync(path.join(root, 'index.html'), 'ok')
+  const storageFile = path.join(tmpDir(), 'sync', 'grad.json')
+  const inst = createLanServer({ webRoot: root, storageFile, basePort: 0 })
+  const port = await inst.start()
+  const base = `http://127.0.0.1:${port}`
+  try {
+    for (const bad of ['null', 'file:///etc', 'http://'] ) {
+      const r = await fetch(`${base}/api/storage`, { method: 'PUT', headers: { Origin: bad }, body: '{"tasks":[]}' })
+      assert.strictEqual(r.status, 403, `Origin=${bad} 应被拒绝`)
+    }
+  } finally {
+    await inst.stop()
+  }
+})

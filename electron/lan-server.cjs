@@ -114,6 +114,29 @@ function authorize(req, token) {
   return auth === `Bearer ${token}`
 }
 
+// CSRF 防护：带 Origin 的请求必须来自本服务自身（或 localhost/127.0.0.1 本机）。
+// 设计原则：不拒绝无 Origin 请求（curl/CLI/部分同源 fetch 无 Origin），
+// 由 token 鉴权兜底；恶意网页跨站写请求会带 Origin: http://evil.com → 403。
+function originAllowed(req, origin) {
+  if (!origin || typeof origin !== 'string') return true // 无 Origin：非浏览器客户端，依赖 token
+  let u
+  try {
+    u = new URL(origin)
+  } catch {
+    return false
+  }
+  if (u.protocol !== 'http:' && u.protocol !== 'https:') return false
+  const host = String(req.headers['host'] || '')
+  if (!host) return false // 无 Host 头却带 Origin → 拒绝
+  if (u.host === host) return true // 自身地址（含端口）
+  // 本机变体：localhost / 127.0.0.1，端口一致
+  if ((u.hostname === 'localhost' || u.hostname === '127.0.0.1')) {
+    const port = host.includes(':') ? host.split(':')[1] : (u.protocol === 'https:' ? '443' : '80')
+    if (u.port === port || (u.port === '' && (port === '80' || port === '443'))) return true
+  }
+  return false
+}
+
 // 创建服务器；返回 { server, storage, start }
 function createLanServer({ webRoot, storageFile, basePort = 8899, token = '' }) {
   const root = path.resolve(webRoot)
@@ -140,12 +163,20 @@ function createLanServer({ webRoot, storageFile, basePort = 8899, token = '' }) 
     const method = req.method || 'GET'
     const url = req.url || '/'
 
-    // 数据接口鉴权（静态页面保持开放，仅保护 /api/storage）
-    if (url.startsWith('/api/storage') && !authorize(req, tokenRef)) {
-      res.writeHead(401, { 'Content-Type': 'text/plain; charset=utf-8' })
-      res.end('unauthorized')
-      log(method, url, res.statusCode, req)
-      return
+    // 数据接口鉴权（静态页面保持开放，仅保护 /api/storage）+ CSRF Origin 校验
+    if (url.startsWith('/api/storage')) {
+      if (!authorize(req, tokenRef)) {
+        res.writeHead(401, { 'Content-Type': 'text/plain; charset=utf-8' })
+        res.end('unauthorized')
+        log(method, url, res.statusCode, req)
+        return
+      }
+      if (!originAllowed(req, req.headers['origin'])) {
+        res.writeHead(403, { 'Content-Type': 'text/plain; charset=utf-8' })
+        res.end('origin not allowed')
+        log(method, url, res.statusCode, req)
+        return
+      }
     }
 
     if (method === 'GET' && url.startsWith('/api/storage')) {

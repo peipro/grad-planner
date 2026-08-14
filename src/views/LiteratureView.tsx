@@ -1,10 +1,15 @@
 import { useMemo, useRef, useState } from 'react'
 import { format } from 'date-fns'
-import { Plus, Trash2, BookOpen, Upload, FileDown, CheckSquare, Calendar as CalendarIcon, CalendarCheck, PencilLine, Layers } from 'lucide-react'
+import { Plus, Trash2, BookOpen, Upload, FileDown, CheckSquare, Calendar as CalendarIcon, CalendarCheck, PencilLine, Layers, StickyNote } from 'lucide-react'
 import { useStore, uid } from '../store'
 import { Paper, PaperStatus, Priority, EventType } from '../types'
 import { parseImportJson, papersFromImport, papersTemplateJson, tasksFromImport, eventsFromImport, ImportPreview } from '../lib/import'
 import { useToast } from '../lib/toast'
+import {
+  notesOfPaper, projectsOfPaper,
+  createLiteratureNote, linkPaperNote, unlinkPaperNote,
+  linkPaperProject, unlinkPaperProject,
+} from '../lib/relations'
 import PromptModal from '../components/PromptModal'
 import DatePicker from '../components/DatePicker'
 
@@ -53,6 +58,8 @@ interface EventConfirmState {
 export default function LiteratureView() {
   const papers = useStore((s) => s.papers)
   const tasks = useStore((s) => s.tasks)
+  const notes = useStore((s) => s.notes)
+  const projects = useStore((s) => s.projects)
   const paperStages = useStore((s) => s.paperStages)
   const addPaperStage = useStore((s) => s.addPaperStage)
   const deletePaperStage = useStore((s) => s.deletePaperStage)
@@ -69,6 +76,10 @@ export default function LiteratureView() {
   const [statusFilter, setStatusFilter] = useState<PaperStatus | 'all'>('all')
   const [planView, setPlanView] = useState(false)
   const [modalOpen, setModalOpen] = useState(false)
+  // Phase 2A：论文关系面板（相关笔记 / 相关项目）
+  const [relPaper, setRelPaper] = useState<Paper | null>(null)
+  const [relNoteAdd, setRelNoteAdd] = useState<string>('')
+  const [relProjectAdd, setRelProjectAdd] = useState<string>('')
   const [form, setForm] = useState({ title: '', authors: '', year: '', venue: '', stage: '', category: '其他', plannedDate: '', note: '' })
   const [preview, setPreview] = useState<ImportPreview | null>(null)
   const [editingTitle, setEditingTitle] = useState<Paper | null>(null)
@@ -454,6 +465,7 @@ export default function LiteratureView() {
                     <span className={`status-badge ${meta.cls}`} style={{ cursor: 'pointer' }} title="点击切换状态" onClick={() => cycleStatus(p)}>{meta.label}</span>
                     <button className="icon-btn" title="转待办" onClick={() => openTaskConfirm(p)}><CheckSquare size={15} /></button>
                     <button className="icon-btn" title="转日历日程" onClick={() => openEventConfirm(p)}><CalendarIcon size={15} /></button>
+                    <button className="icon-btn" title="笔记与项目" onClick={() => { setRelPaper(p); setRelNoteAdd(''); setRelProjectAdd('') }}><StickyNote size={15} /></button>
                     <button className="icon-btn" title="编辑标题" onClick={() => setEditingTitle(p)}><PencilLine size={15} /></button>
                     <button className="icon-btn danger" title="删除" onClick={() => { deletePaper(p.id); useToast.getState().show(`已删除文献「${p.title}」`, { actionLabel: '撤销', onAction: () => importPapers([p]) }) }}><Trash2 size={15} /></button>
                   </div>
@@ -612,6 +624,69 @@ export default function LiteratureView() {
             setEditingTitle(null)
           }}
         />
+      )}
+
+      {/* Phase 2A：论文关系面板（相关笔记 / 相关项目） */}
+      {relPaper && (
+        <div className="modal-overlay" onClick={() => setRelPaper(null)}>
+          <div className="modal" style={{ width: 460 }} onClick={(e) => e.stopPropagation()}>
+            <div className="modal-title"><StickyNote size={15} /> 「{relPaper.title.slice(0, 28)}」</div>
+            <div className="field">
+              <label>相关笔记（{notesOfPaper(relPaper.id).length}）</label>
+              {notesOfPaper(relPaper.id).length === 0 && (
+                <div style={{ fontSize: 12, color: 'var(--text-3)', padding: '4px 0' }}>暂无笔记</div>
+              )}
+              {notesOfPaper(relPaper.id).map((n) => (
+                <div key={n.id} style={{ display: 'flex', alignItems: 'center', gap: 6, justifyContent: 'space-between', padding: '4px 0', borderBottom: '1px solid var(--border)' }}>
+                  <span style={{ fontSize: 13, flex: 1, minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{n.title}</span>
+                  <button className="icon-btn danger" title="解除关联" onClick={() => unlinkPaperNote(relPaper.id, n.id)}><Trash2 size={13} /></button>
+                </div>
+              ))}
+              <div style={{ display: 'flex', gap: 6, marginTop: 8 }}>
+                <button
+                  className="btn btn-primary btn-sm"
+                  onClick={() => { createLiteratureNote(relPaper); useStore.getState().setView('notes'); setRelPaper(null) }}
+                ><Plus size={13} /> 创建阅读笔记</button>
+                <select
+                  value={relNoteAdd}
+                  onChange={(e) => setRelNoteAdd(e.target.value)}
+                  style={{ flex: 1, fontSize: 12, minWidth: 0 }}
+                >
+                  <option value="">关联已有笔记…</option>
+                  {notes.filter((n) => !notesOfPaper(relPaper.id).some((x) => x.id === n.id)).map((n) => (
+                    <option key={n.id} value={n.id}>{n.title}</option>
+                  ))}
+                </select>
+                <button className="btn btn-ghost btn-sm" disabled={!relNoteAdd} onClick={() => { linkPaperNote(relPaper.id, relNoteAdd); setRelNoteAdd('') }}>关联</button>
+              </div>
+            </div>
+            <div className="field">
+              <label>相关项目（{projectsOfPaper(relPaper.id).length}）</label>
+              {projectsOfPaper(relPaper.id).length === 0 && (
+                <div style={{ fontSize: 12, color: 'var(--text-3)', padding: '4px 0' }}>暂无项目</div>
+              )}
+              {projectsOfPaper(relPaper.id).map((pr) => (
+                <div key={pr.id} style={{ display: 'flex', alignItems: 'center', gap: 6, justifyContent: 'space-between', padding: '4px 0', borderBottom: '1px solid var(--border)' }}>
+                  <span style={{ fontSize: 13, flex: 1 }}>{pr.name}</span>
+                  <button className="icon-btn danger" title="解除关联" onClick={() => unlinkPaperProject(relPaper.id, pr.id)}><Trash2 size={13} /></button>
+                </div>
+              ))}
+              <div style={{ display: 'flex', gap: 6, marginTop: 8 }}>
+                <select
+                  value={relProjectAdd}
+                  onChange={(e) => setRelProjectAdd(e.target.value)}
+                  style={{ flex: 1, fontSize: 12, minWidth: 0 }}
+                >
+                  <option value="">关联项目…</option>
+                  {projects.filter((pr) => !projectsOfPaper(relPaper.id).some((x) => x.id === pr.id)).map((pr) => (
+                    <option key={pr.id} value={pr.id}>{pr.name}</option>
+                  ))}
+                </select>
+                <button className="btn btn-ghost btn-sm" disabled={!relProjectAdd} onClick={() => { linkPaperProject(relPaper.id, relProjectAdd); setRelProjectAdd('') }}>关联</button>
+              </div>
+            </div>
+          </div>
+        </div>
       )}
 
       {modalOpen && (

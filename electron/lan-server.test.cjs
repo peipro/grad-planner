@@ -185,3 +185,127 @@ test('HTTP: setToken 热重置令牌', async () => {
     await inst.stop()
   }
 })
+
+// ===== Task 2: PUT 严格校验 JSON（非法内容绝不允许写坏唯一数据源） =====
+
+test('HTTP: 非法 JSON PUT → 400 且原文件不变', async () => {
+  const root = tmpDir()
+  fs.writeFileSync(path.join(root, 'index.html'), 'ok')
+  const storageFile = path.join(tmpDir(), 'sync', 'grad.json')
+  const inst = createLanServer({ webRoot: root, storageFile, basePort: 0 })
+  const port = await inst.start()
+  const base = `http://127.0.0.1:${port}`
+  try {
+    // 先写入一份合法数据
+    let r = await fetch(`${base}/api/storage`, { method: 'PUT', body: '{"tasks":[{"id":"t1"}]}' })
+    assert.strictEqual(r.status, 200)
+
+    // 非法 JSON：必须 400，且文件保持原样
+    r = await fetch(`${base}/api/storage`, { method: 'PUT', body: '这不是JSON{{{{' })
+    assert.strictEqual(r.status, 400)
+    r = await fetch(`${base}/api/storage`)
+    assert.strictEqual(r.status, 200)
+    assert.strictEqual(await r.text(), '{"tasks":[{"id":"t1"}]}', '非法 JSON 不得修改现有 storage')
+  } finally {
+    await inst.stop()
+  }
+})
+
+test('HTTP: 顶层结构错误（字段应为数组却是其他类型）→ 400', async () => {
+  const root = tmpDir()
+  fs.writeFileSync(path.join(root, 'index.html'), 'ok')
+  const storageFile = path.join(tmpDir(), 'sync', 'grad.json')
+  const inst = createLanServer({ webRoot: root, storageFile, basePort: 0 })
+  const port = await inst.start()
+  const base = `http://127.0.0.1:${port}`
+  try {
+    let r = await fetch(`${base}/api/storage`, { method: 'PUT', body: '{"events":"not-an-array"}' })
+    assert.strictEqual(r.status, 400)
+    r = await fetch(`${base}/api/storage`, { method: 'PUT', body: '{"tasks":{}}' })
+    assert.strictEqual(r.status, 400)
+    r = await fetch(`${base}/api/storage`, { method: 'PUT', body: '{"paperStages":["a", 3]}' })
+    assert.strictEqual(r.status, 400)
+    // 根节点必须是对象
+    r = await fetch(`${base}/api/storage`, { method: 'PUT', body: '[1,2,3]' })
+    assert.strictEqual(r.status, 400)
+    // 原文件仍不存在（全部被拒绝）
+    r = await fetch(`${base}/api/storage`)
+    assert.strictEqual(r.status, 404)
+  } finally {
+    await inst.stop()
+  }
+})
+
+test('HTTP: 合法 JSON → 200 且数据正确写入', async () => {
+  const root = tmpDir()
+  fs.writeFileSync(path.join(root, 'index.html'), 'ok')
+  const storageFile = path.join(tmpDir(), 'sync', 'grad.json')
+  const inst = createLanServer({ webRoot: root, storageFile, basePort: 0 })
+  const port = await inst.start()
+  const base = `http://127.0.0.1:${port}`
+  try {
+    const payload = JSON.stringify({
+      events: [{ id: 'e1', title: '组会' }],
+      tasks: [{ id: 't1', title: '写论文' }],
+      milestones: [],
+      notes: [],
+      pomodoros: [],
+      birthdays: [],
+      habits: [],
+      projects: [],
+      papers: [],
+      paperStages: ['阶段0'],
+    })
+    let r = await fetch(`${base}/api/storage`, { method: 'PUT', body: payload })
+    assert.strictEqual(r.status, 200)
+    r = await fetch(`${base}/api/storage`)
+    assert.strictEqual(r.status, 200)
+    const saved = JSON.parse(await r.text())
+    assert.strictEqual(saved.tasks[0].title, '写论文')
+    assert.strictEqual(saved.paperStages[0], '阶段0')
+  } finally {
+    await inst.stop()
+  }
+})
+
+test('HTTP: 超大 body → 413 且不写盘', async () => {
+  const root = tmpDir()
+  fs.writeFileSync(path.join(root, 'index.html'), 'ok')
+  const storageFile = path.join(tmpDir(), 'sync', 'grad.json')
+  const inst = createLanServer({ webRoot: root, storageFile, basePort: 0 })
+  const port = await inst.start()
+  const base = `http://127.0.0.1:${port}`
+  try {
+    // 11MB 超过 MAX_BODY(10MB)
+    const big = JSON.stringify({ tasks: 'x'.repeat(11 * 1024 * 1024) })
+    const r = await fetch(`${base}/api/storage`, { method: 'PUT', body: big })
+    assert.strictEqual(r.status, 413)
+    const r2 = await fetch(`${base}/api/storage`)
+    assert.strictEqual(r2.status, 404, '超大 body 不得写入文件')
+  } finally {
+    await inst.stop()
+  }
+})
+
+test('HTTP: 并发 PUT（多客户端同时写入）不互相损坏，最后一次生效', async () => {
+  const root = tmpDir()
+  fs.writeFileSync(path.join(root, 'index.html'), 'ok')
+  const storageFile = path.join(tmpDir(), 'sync', 'grad.json')
+  const inst = createLanServer({ webRoot: root, storageFile, basePort: 0 })
+  const port = await inst.start()
+  const base = `http://127.0.0.1:${port}`
+  try {
+    const mk = (n) => JSON.stringify({ tasks: [{ id: n, title: 'T' + n }] })
+    await Promise.all([
+      fetch(`${base}/api/storage`, { method: 'PUT', body: mk('a') }),
+      fetch(`${base}/api/storage`, { method: 'PUT', body: mk('b') }),
+      fetch(`${base}/api/storage`, { method: 'PUT', body: mk('c') }),
+    ])
+    const r = await fetch(`${base}/api/storage`)
+    const saved = JSON.parse(await r.text())
+    assert.ok(['a', 'b', 'c'].includes(saved.tasks[0].id), '并发写入后文件必须是完整合法 JSON')
+    assert.strictEqual(saved.tasks.length, 1, 'last-write-wins：最终只保留最后一份（已知限制，Phase 1 处理冲突）')
+  } finally {
+    await inst.stop()
+  }
+})

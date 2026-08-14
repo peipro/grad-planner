@@ -6,6 +6,7 @@ const http = require('http')
 const fs = require('fs')
 const os = require('os')
 const path = require('path')
+const { validateStorageShape } = require('./storage-schema.cjs')
 
 const MIME = {
   '.html': 'text/html; charset=utf-8',
@@ -163,18 +164,41 @@ function createLanServer({ webRoot, storageFile, basePort = 8899, token = '' }) 
     if (method === 'PUT' && url.startsWith('/api/storage')) {
       const chunks = []
       let size = 0
+      let tooLarge = false
       req.on('data', (c) => {
+        if (tooLarge) return
         size += c.length
         if (size > MAX_BODY) {
+          tooLarge = true
+          chunks.length = 0 // 释放已收集的 body，避免内存持续增长
           res.writeHead(413, { 'Content-Type': 'text/plain; charset=utf-8' })
           res.end('too large')
-          req.destroy()
+          // 不 destroy：让 413 响应完整送达客户端；后续 data 因 tooLarge 直接丢弃
           return
         }
         chunks.push(c)
       })
       req.on('end', () => {
-        const r = storage.write(Buffer.concat(chunks).toString('utf-8'))
+        if (tooLarge) return // 已返回 413，不再写入
+        const body = Buffer.concat(chunks).toString('utf-8')
+        // 严格校验：非法 JSON / 结构不正确 → 400，绝对不能修改现有 storage
+        let parsed
+        try {
+          parsed = JSON.parse(body)
+        } catch {
+          res.writeHead(400, { 'Content-Type': 'text/plain; charset=utf-8' })
+          res.end('invalid json')
+          log(method, url, res.statusCode, req)
+          return
+        }
+        const v = validateStorageShape(parsed)
+        if (!v.ok) {
+          res.writeHead(400, { 'Content-Type': 'text/plain; charset=utf-8' })
+          res.end(v.errors.join('; '))
+          log(method, url, res.statusCode, req)
+          return
+        }
+        const r = storage.write(body)
         if (r.ok) {
           res.writeHead(200, { 'Content-Type': 'application/json; charset=utf-8' })
           res.end('{"ok":true}')

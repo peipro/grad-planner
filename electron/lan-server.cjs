@@ -289,13 +289,22 @@ function createLanServer({ webRoot, storageFile, basePort = 8899, token = '', mu
           res.writeHead(200, { 'Content-Type': 'application/json; charset=utf-8' })
           res.end(JSON.stringify({ ok: true, results: r.results }))
         } else {
-          res.writeHead(400, { 'Content-Type': 'application/json; charset=utf-8' })
-          res.end(JSON.stringify({
+          const body = {
             ok: false,
             error: r.error || 'mutation failed',
             detail: r.detail || '',
             failedIndex: typeof r.failedIndex === 'number' ? r.failedIndex : null,
-          }))
+          }
+          // Phase 1B-3B：conflict 详情（与 IPC 透传一致，Test F）
+          if (r.error === 'conflict') {
+            body.entityType = r.entityType
+            body.entityId = r.entityId
+            body.expectedVersion = r.expectedVersion
+            body.actualVersion = r.actualVersion
+            body.currentEntity = r.currentEntity
+          }
+          res.writeHead(400, { 'Content-Type': 'application/json; charset=utf-8' })
+          res.end(JSON.stringify(body))
         }
         log(method, url, res.statusCode, req)
       })

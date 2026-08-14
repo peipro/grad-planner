@@ -660,3 +660,73 @@ test('双端不同实体并发：Desktop（IPC）改 Task + Tablet（HTTP）改 
     await inst.stop()
   }
 })
+
+// ===== Phase 1B-3B：HTTP conflict（Test F：IPC/HTTP 语义一致） =====
+
+test('HTTP: stale update → 400 + conflict 结构（与 IPC 完全一致）', async () => {
+  const root = tmpDir()
+  fs.writeFileSync(path.join(root, 'index.html'), 'ok')
+  const storageFile = path.join(tmpDir(), 'sync', 'grad.json')
+  const engine = createMutationEngine({ storageFile })
+  const inst = createLanServer({ webRoot: root, storageFile, basePort: 0, mutationEngine: engine })
+  const port = await inst.start()
+  const base = `http://127.0.0.1:${port}`
+  const post = (mutations) => fetch(`${base}/api/mutations`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ mutations }),
+  })
+  try {
+    await post([{ type: 'task.create', payload: { id: 't1', title: 'T1', priority: 'medium', status: 'todo', createdAt: 'x' } }]) // v1
+    // 先提交一次成功 update（v1 → v2）
+    const okRes = await post([{ type: 'task.update', id: 't1', entity: { id: 't1', title: 'T1v2', priority: 'medium', status: 'todo', createdAt: 'x' }, baseVersion: 1 }])
+    assert.strictEqual(okRes.status, 200)
+    // HTTP：stale update（baseVersion=1，actual=2）→ conflict
+    const r = await post([{ type: 'task.update', id: 't1', entity: { id: 't1', title: 'stale', priority: 'medium', status: 'todo', createdAt: 'x' }, baseVersion: 1 }])
+    assert.strictEqual(r.status, 400)
+    const j = await r.json()
+    assert.strictEqual(j.ok, false)
+    assert.strictEqual(j.error, 'conflict')
+    assert.strictEqual(j.entityType, 'task')
+    assert.strictEqual(j.entityId, 't1')
+    assert.strictEqual(j.expectedVersion, 1)
+    assert.strictEqual(j.actualVersion, 2)
+    // IPC（同引擎直接调用）返回同一结构
+    const ipc = engine.applyMutations([{ type: 'task.update', id: 't1', entity: { id: 't1', title: 'stale2', priority: 'medium', status: 'todo', createdAt: 'x' }, baseVersion: 1 }])
+    assert.strictEqual(ipc.ok, false)
+    assert.strictEqual(ipc.error, 'conflict')
+    assert.strictEqual(ipc.entityType, j.entityType)
+    assert.strictEqual(ipc.expectedVersion, j.expectedVersion)
+    assert.strictEqual(ipc.actualVersion, j.actualVersion)
+    // 权威未被篡改
+    assert.strictEqual(engine.getState().tasks[0].title, 'T1v2')
+  } finally {
+    await inst.stop()
+  }
+})
+
+test('HTTP: stale delete → conflict（不删除新版本实体）', async () => {
+  const root = tmpDir()
+  fs.writeFileSync(path.join(root, 'index.html'), 'ok')
+  const storageFile = path.join(tmpDir(), 'sync', 'grad.json')
+  const engine = createMutationEngine({ storageFile })
+  const inst = createLanServer({ webRoot: root, storageFile, basePort: 0, mutationEngine: engine })
+  const port = await inst.start()
+  const base = `http://127.0.0.1:${port}`
+  const post = (mutations) => fetch(`${base}/api/mutations`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ mutations }),
+  })
+  try {
+    await post([{ type: 'note.create', payload: { id: 'n1', title: 'N1', content: 'c', tags: [], createdAt: 'x', updatedAt: 'x' } }]) // v1
+    await post([{ type: 'note.update', id: 'n1', entity: { id: 'n1', title: 'N1', content: 'v2', tags: [], createdAt: 'x', updatedAt: 'x' }, baseVersion: 1 }]) // v2
+    const r = await post([{ type: 'note.delete', id: 'n1', baseVersion: 1 }]) // stale delete
+    assert.strictEqual(r.status, 400)
+    const j = await r.json()
+    assert.strictEqual(j.error, 'conflict')
+    assert.strictEqual(engine.getState().notes.length, 1, '实体未被删除')
+  } finally {
+    await inst.stop()
+  }
+})

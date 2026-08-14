@@ -109,9 +109,9 @@
     return out
   }
 
-  function dispatchFailed(error) {
+  function dispatchFailed(detail) {
     try {
-      window.dispatchEvent(new CustomEvent('sync-mutation-failed', { detail: { error: error } }))
+      window.dispatchEvent(new CustomEvent('sync-mutation-failed', { detail: detail }))
     } catch {}
   }
 
@@ -121,7 +121,16 @@
       // 无论成功/失败，基准推进到最近一次 diff 的 state（失败不重试，避免无限循环）
       if (lastDiffState) baseState = lastDiffState
       if (res && res.ok) return
-      dispatchFailed((res && res.error) || 'network_error')
+      var detail = { error: (res && res.error) || 'network_error' }
+      // Phase 1B-3B：conflict 详情透传（§13，与 IPC/HTTP 语义一致）
+      if (res && res.error === 'conflict') {
+        detail.entityType = res.entityType
+        detail.entityId = res.entityId
+        detail.expectedVersion = res.expectedVersion
+        detail.actualVersion = res.actualVersion
+        detail.currentEntity = res.currentEntity
+      }
+      dispatchFailed(detail)
     }
     if (isElectron) {
       // 契约：IPC syncMutate 接收 Mutation[]（数组），与 main.cjs 的 Array.isArray 校验一致

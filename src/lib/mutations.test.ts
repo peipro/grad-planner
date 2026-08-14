@@ -342,6 +342,29 @@ describe('mutation 失败分类（L4：不搞一刀切 refresh）', () => {
     expect(REFRESH_ON_ERROR.has('invalid_mutation')).toBe(false)
     expect(REFRESH_ON_ERROR.has('network_error')).toBe(false)
     expect(REFRESH_ON_ERROR.has('internal_error')).toBe(false)
+    expect(REFRESH_ON_ERROR.has('conflict')).toBe(false) // 冲突不刷新：本地 draft 保留（§16/18）
+  })
+
+  it('Test H：conflict → dispatch sync-mutation-failed（detail.error=conflict，本地 draft 不丢）', async () => {
+    const errors: Array<{ error: string; entityId?: string; actualVersion?: number }> = []
+    window.addEventListener('sync-mutation-failed', (e) => {
+      errors.push(((e as CustomEvent).detail || {}))
+    })
+    mockResult = {
+      ok: false, error: 'conflict', entityType: 'note', entityId: 'n1',
+      expectedVersion: 1, actualVersion: 3, currentEntity: { id: 'n1', title: '服务端版本', version: 3 },
+    }
+    // 用户保存触发（diff → mutation 提交被引擎拒绝）
+    ;(window as any).electronAPI.syncStorageGet = async () => ({ found: true, data: persistStr({ notes: [makeNote('n1', { content: '服务端' })], pomo: {} }) })
+    await window.localStorage.getItem(SYNC_KEY)
+    mockCalls.length = 0
+    window.localStorage.setItem(SYNC_KEY, persistStr({ notes: [makeNote('n1', { content: '我的草稿' })], pomo: {} }))
+    await flushAndWait()
+    expect(errors).toHaveLength(1)
+    expect(errors[0].error).toBe('conflict')
+    expect(errors[0].entityId).toBe('n1')
+    expect(errors[0].actualVersion).toBe(3)
+    // 本地 draft 保留由 NotesView.test.tsx 组件层覆盖（setItem 不直接更新 useStore）
   })
 })
 

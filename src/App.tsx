@@ -101,6 +101,12 @@ export default function App() {
       if (REFRESH_ON_ERROR.has(err)) {
         useToast.getState().show('数据保存失败（磁盘写入错误），已恢复为已保存的数据')
         refreshFromAuthority()
+      } else if (err === 'conflict') {
+        // Phase 1B-3B：版本冲突 —— 绝不静默覆盖；本地 draft 保留，用户选择
+        useToast.getState().show('该内容已在其他设备修改（版本冲突），本地修改已保留', {
+          actionLabel: '加载最新',
+          onAction: () => refreshFromAuthority(),
+        })
       } else if (err === 'network_error') {
         useToast.getState().show('网络不可用，本次修改未同步（将在下次操作时重新尝试）')
       } else if (err === 'invalid_mutation' || err === 'validation_failure' || err === 'entity_not_found') {

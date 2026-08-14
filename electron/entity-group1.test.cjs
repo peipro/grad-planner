@@ -149,6 +149,48 @@ test('project.delete 事务：project 不存在 → 幂等成功', () => {
   assert.strictEqual(r.results[0].deleted, false)
 })
 
+test('引用完整性（跨 batch）：project 已删后平板迟到 task.update（携带旧 projectId）→ 自动解引用，其他字段保留', () => {
+  const file = tmpFile()
+  const engine = createMutationEngine({ storageFile: file })
+  // 初始：project p1 + task t1（属于 p1，平板改过标题）
+  engine.applyMutations([
+    { type: 'project.create', payload: makeProject('p1') },
+    { type: 'task.create', payload: { id: 't1', title: 'T1', priority: 'medium', status: 'todo', projectId: 'p1', createdAt: 'x' } },
+  ])
+  // 桌面先删除 project（独立 batch，模拟跨 batch 时序）
+  assert.strictEqual(engine.applyMutations([{ type: 'project.delete', id: 'p1' }]).ok, true)
+  // 平板迟到提交 task.update（平板本地快照仍含旧 projectId + 新标题）
+  const r = engine.applyMutations([{
+    type: 'task.update',
+    id: 't1',
+    entity: { id: 't1', title: 'T1-平板新标题', priority: 'high', status: 'doing', projectId: 'p1', createdAt: 'x' },
+  }])
+  assert.strictEqual(r.ok, true)
+  const t1 = engine.getState().tasks.find((t) => t.id === 't1')
+  assert.strictEqual(t1.title, 'T1-平板新标题') // 平板修改保留
+  assert.strictEqual(t1.projectId, undefined)   // 悬挂引用被解引用
+  assert.strictEqual(t1.priority, 'high')
+})
+
+test('引用完整性：task.create 携带不存在的 projectId → 自动清空；存在的 projectId → 保留', () => {
+  const file = tmpFile()
+  const engine = createMutationEngine({ storageFile: file })
+  engine.applyMutations([{ type: 'project.create', payload: makeProject('p1') }])
+  // 存在 → 保留
+  engine.applyMutations([{ type: 'task.create', payload: { id: 'a', title: 'A', priority: 'medium', status: 'todo', projectId: 'p1', createdAt: 'x' } }])
+  assert.strictEqual(engine.getState().tasks[0].projectId, 'p1')
+  // 不存在 → 清空
+  engine.applyMutations([{ type: 'task.create', payload: { id: 'b', title: 'B', priority: 'medium', status: 'todo', projectId: 'ghost', createdAt: 'x' } }])
+  assert.strictEqual(engine.getState().tasks[1].projectId, undefined)
+})
+
+test('引用完整性：milestone 同样适用', () => {
+  const file = tmpFile()
+  const engine = createMutationEngine({ storageFile: file })
+  engine.applyMutations([{ type: 'milestone.create', payload: { id: 'm1', title: 'M1', startDate: 'a', endDate: 'b', progress: 0, color: 'blue', projectId: 'ghost' } }])
+  assert.strictEqual(engine.getState().milestones[0].projectId, undefined)
+})
+
 // ===== paperStages（无 id 实体） =====
 
 test('paperStages.replace 与 paperStage.delete 事务', () => {

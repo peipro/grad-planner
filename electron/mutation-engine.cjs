@@ -203,6 +203,18 @@ function createMutationEngine({ storageFile, write, onPersisted }) {
     return state[field]
   }
 
+  // 引用完整性（跨通道、跨 batch 兜底）：task/milestone 的 projectId 必须引用存在的 project，
+  // 否则视为悬挂引用 → 权威侧原子清空（并发删除 project 后，平板迟到的 update 不会挂回已删引用）
+  function enforceRefIntegrity(state, kind, entity) {
+    if ((kind === 'task' || kind === 'milestone') && entity && entity.projectId !== undefined) {
+      const projects = Array.isArray(state.projects) ? state.projects : []
+      if (!projects.some((p) => p && p.id === entity.projectId)) {
+        return { ...entity, projectId: undefined }
+      }
+    }
+    return entity
+  }
+
   // 应用单条 mutation 到 working state（就地修改）。返回 { ok, error?, id?, entity? }
   // ctx：batch 上下文（跨实体事务保护，见 applyMutations 预扫描）
   function applyOne(state, m, ctx) {
@@ -261,18 +273,20 @@ function createMutationEngine({ storageFile, write, onPersisted }) {
     }
     const err = cfg.validate(entity)
     if (err) return { ok: false, error: ERROR_CODES.VALIDATION_FAILURE, detail: err }
+    // 引用完整性：projectId 悬挂引用 → 清空（不覆盖其他字段）
+    const resolvedEntity = enforceRefIntegrity(state, kind, entity)
 
     const arr = ensureArray(state, field)
     if (op === 'create') {
       // 幂等：同 id 已存在 → 覆盖（重试不产生重复实体）
-      const idx = arr.findIndex((e) => e && e.id === entity.id)
-      if (idx >= 0) arr[idx] = entity
-      else arr.push(entity)
-      return { ok: true, type: m.type, id: entity.id, entity }
+      const idx = arr.findIndex((e) => e && e.id === resolvedEntity.id)
+      if (idx >= 0) arr[idx] = resolvedEntity
+      else arr.push(resolvedEntity)
+      return { ok: true, type: m.type, id: resolvedEntity.id, entity: resolvedEntity }
     }
 
     // update
-    if (m.id !== entity.id) return { ok: false, error: ERROR_CODES.INVALID_MUTATION, detail: 'update 的 id 与 entity.id 不一致' }
+    if (m.id !== resolvedEntity.id) return { ok: false, error: ERROR_CODES.INVALID_MUTATION, detail: 'update 的 id 与 entity.id 不一致' }
     const idx = arr.findIndex((e) => e && e.id === m.id)
     if (idx < 0) return { ok: false, error: ERROR_CODES.ENTITY_NOT_FOUND, detail: `${field} 中不存在 id=${m.id}` }
     // 跨实体事务保护：实体属于本 batch 中被删除的 project/paperStage → 跳过该过期 update
@@ -290,8 +304,8 @@ function createMutationEngine({ storageFile, write, onPersisted }) {
         }
       }
     }
-    arr[idx] = entity
-    return { ok: true, type: m.type, id: entity.id, entity }
+    arr[idx] = resolvedEntity
+    return { ok: true, type: m.type, id: resolvedEntity.id, entity: resolvedEntity }
   }
 
   // 批处理：读取权威 → working copy → 依次 apply → 全部成功 → 验证 → 一次性持久化

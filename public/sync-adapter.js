@@ -101,7 +101,8 @@
       dispatchFailed((res && res.error) || 'network_error')
     }
     if (isElectron) {
-      window.electronAPI.syncMutate({ mutations: batch })
+      // 契约：IPC syncMutate 接收 Mutation[]（数组），与 main.cjs 的 Array.isArray 校验一致
+      window.electronAPI.syncMutate(batch)
         .then(handle)
         .catch(function () { handle({ ok: false, error: 'network_error' }) })
     } else {

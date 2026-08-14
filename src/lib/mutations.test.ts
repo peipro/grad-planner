@@ -40,7 +40,7 @@ async function flushAndWait() {
   await vi.waitFor(() => { expect(mockCalls.length).toBeGreaterThanOrEqual(1) })
 }
 
-let mockCalls: Array<{ mutations: unknown[] }>
+let mockCalls: any[][]  // IPC 契约：syncMutate 收到 Mutation[] 数组
 let mockResult: any
 
 // 原生 Storage 方法（模块首次加载时捕获，未被 patch 污染）
@@ -72,7 +72,12 @@ beforeEach(async () => {
     syncStorageGet: async () => ({ found: true, data: persistStr({ tasks: [], notes: [], pomo: { running: false } }) }),
     syncStorageSet: async () => ({ ok: true }),
     syncStorageRemove: async () => ({ ok: true }),
-    syncMutate: async (payload: unknown) => { mockCalls.push(payload as any); return mockResult },
+    syncMutate: async (payload: unknown) => {
+      // 模拟真实 main.cjs 的 sync-mutate 校验（IPC 契约：Mutation[]，禁止对象包装——与生产一致）
+      if (!Array.isArray(payload)) return { ok: false, error: 'invalid_mutation', detail: 'mutations 必须是数组' }
+      mockCalls.push(payload as any)
+      return mockResult
+    },
   }
   restoreNativeStorage()
   loadAdapter()
@@ -94,7 +99,7 @@ describe('sync-adapter mutation（真实 {state, version} payload）', () => {
     window.localStorage.setItem(SYNC_KEY, persistStr(next))
     await flushAndWait()
     expect(mockCalls).toHaveLength(1)
-    expect(mockCalls[0].mutations).toEqual([{ type: 'task.create', payload: makeTask('t1') }])
+    expect(mockCalls[0]).toEqual([{ type: 'task.create', payload: makeTask('t1') }])
   })
 
   it('task.update（同 id 内容变化）→ task.update 全量实体', async () => {
@@ -107,7 +112,7 @@ describe('sync-adapter mutation（真实 {state, version} payload）', () => {
     const next = { tasks: [makeTask('t1', { title: 'T1 updated' })], notes: [], pomo: {} }
     window.localStorage.setItem(SYNC_KEY, persistStr(next))
     await flushAndWait()
-    expect(mockCalls[0].mutations).toEqual([
+    expect(mockCalls[0]).toEqual([
       { type: 'task.update', id: 't1', entity: makeTask('t1', { title: 'T1 updated' }) },
     ])
   })
@@ -122,7 +127,7 @@ describe('sync-adapter mutation（真实 {state, version} payload）', () => {
     const next = { tasks: [], notes: [], pomo: {} }
     window.localStorage.setItem(SYNC_KEY, persistStr(next))
     await flushAndWait()
-    expect(mockCalls[0].mutations).toEqual([{ type: 'task.delete', id: 't1' }])
+    expect(mockCalls[0]).toEqual([{ type: 'task.delete', id: 't1' }])
   })
 
   it('note.create / note.update / note.delete 同样成立', async () => {
@@ -130,13 +135,13 @@ describe('sync-adapter mutation（真实 {state, version} payload）', () => {
     const next1 = { tasks: [], notes: [makeNote('n1')], pomo: {} }
     window.localStorage.setItem(SYNC_KEY, persistStr(next1))
     await flushAndWait()
-    expect(mockCalls[0].mutations).toEqual([{ type: 'note.create', payload: makeNote('n1') }])
+    expect(mockCalls[0]).toEqual([{ type: 'note.create', payload: makeNote('n1') }])
     mockCalls.length = 0
     // update
     const next2 = { tasks: [], notes: [makeNote('n1', { content: 'changed' })], pomo: {} }
     window.localStorage.setItem(SYNC_KEY, persistStr(next2))
     await flushAndWait()
-    expect(mockCalls[0].mutations).toEqual([
+    expect(mockCalls[0]).toEqual([
       { type: 'note.update', id: 'n1', entity: makeNote('n1', { content: 'changed' }) },
     ])
     mockCalls.length = 0
@@ -144,7 +149,7 @@ describe('sync-adapter mutation（真实 {state, version} payload）', () => {
     const next3 = { tasks: [], notes: [], pomo: {} }
     window.localStorage.setItem(SYNC_KEY, persistStr(next3))
     await flushAndWait()
-    expect(mockCalls[0].mutations).toEqual([{ type: 'note.delete', id: 'n1' }])
+    expect(mockCalls[0]).toEqual([{ type: 'note.delete', id: 'n1' }])
   })
 
   it('连续 setItem 合并：提交只保留最新全量 diff（不重复提交）', async () => {
@@ -154,7 +159,7 @@ describe('sync-adapter mutation（真实 {state, version} payload）', () => {
     window.localStorage.setItem(SYNC_KEY, persistStr({ tasks: [makeTask('t1'), makeTask('t2')], notes: [], pomo: {} }))
     await flushAndWait()
     expect(mockCalls).toHaveLength(1)
-    expect(mockCalls[0].mutations).toEqual([
+    expect(mockCalls[0]).toEqual([
       { type: 'task.create', payload: makeTask('t1') },
       { type: 'task.create', payload: makeTask('t2') },
     ])
@@ -192,7 +197,7 @@ describe('sync-adapter mutation（真实 {state, version} payload）', () => {
     const next = { tasks: [makeTask('t1', { title: 'v2' })], notes: [], pomo: {} }
     window.localStorage.setItem(SYNC_KEY, persistStr(next))
     await flushAndWait()
-    expect(mockCalls[0].mutations).toEqual([
+    expect(mockCalls[0]).toEqual([
       { type: 'task.update', id: 't1', entity: makeTask('t1', { title: 'v2' }) },
     ])
   })
@@ -328,7 +333,7 @@ describe('applyAuthoritativeState（state-sync 应用路径）', () => {
     useStore.setState({ tasks: [...cur.tasks, makeTask('t2')] } as any) // 触发 persist setItem
     window.dispatchEvent(new Event('pagehide'))
     await vi.waitFor(() => { expect(mockCalls.length).toBeGreaterThanOrEqual(1) })
-    const ids = mockCalls[0].mutations.map((m: any) => m.id || (m.payload && m.payload.id))
+    const ids = mockCalls[0].map((m: any) => m.id || (m.payload && m.payload.id))
     expect(ids).toEqual(['t2']) // 只提交新变化，不重放权威数据
   })
 

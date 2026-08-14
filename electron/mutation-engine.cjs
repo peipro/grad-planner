@@ -203,6 +203,29 @@ function createMutationEngine({ storageFile, write, onPersisted }) {
     return state[field]
   }
 
+  // ===== Phase 1B-3B: entity version 语义 =====
+  // 每个可修改实体拥有单调递增 version（create=1；成功 update/delete 后 +1）。
+  // 旧数据缺失 version → 视为 1（惰性迁移，不动文件，首次写盘时补齐）。
+  function entityVersion(e) {
+    return e && typeof e.version === 'number' ? e.version : 1
+  }
+  // baseVersion：mutation 携带；缺失（旧客户端）→ null，视为无版本检查（兼容 legacy path）
+  function mutationBaseVersion(m) {
+    return typeof m.baseVersion === 'number' ? m.baseVersion : null
+  }
+  // 冲突结果（不修改 working，不 persist，不广播）
+  function conflictResult(kind, id, expectedVersion, actualVersion, currentEntity) {
+    return {
+      ok: false,
+      error: 'conflict',
+      entityType: kind,
+      entityId: id,
+      expectedVersion,
+      actualVersion,
+      currentEntity,
+    }
+  }
+
   // 引用完整性（跨通道、跨 batch 兜底）：task/milestone 的 projectId 必须引用存在的 project，
   // 否则视为悬挂引用 → 权威侧原子清空（并发删除 project 后，平板迟到的 update 不会挂回已删引用）
   function enforceRefIntegrity(state, kind, entity) {
@@ -261,7 +284,15 @@ function createMutationEngine({ storageFile, write, onPersisted }) {
       if (!isNonEmptyString(m.id)) return { ok: false, error: ERROR_CODES.INVALID_MUTATION, detail: 'delete 缺少合法 id' }
       const arr = ensureArray(state, field)
       const idx = arr.findIndex((e) => e && e.id === m.id)
-      if (idx >= 0) arr.splice(idx, 1)
+      if (idx >= 0) {
+        // Phase 1B-3B：delete 版本检查 —— 旧版本 delete 不得静默删除新版本实体
+        const actualVersion = entityVersion(arr[idx])
+        const baseVersion = mutationBaseVersion(m)
+        if (baseVersion !== null && baseVersion !== actualVersion) {
+          return conflictResult(kind, m.id, baseVersion, actualVersion, arr[idx])
+        }
+        arr.splice(idx, 1)
+      }
       // delete 不存在 id → 幂等成功（收敛操作，重试/重复提交无副作用）
       return { ok: true, type: m.type, id: m.id, entity: null, deleted: idx >= 0 }
     }
@@ -278,11 +309,12 @@ function createMutationEngine({ storageFile, write, onPersisted }) {
 
     const arr = ensureArray(state, field)
     if (op === 'create') {
-      // 幂等：同 id 已存在 → 覆盖（重试不产生重复实体）
+      // 幂等：同 id 已存在 → 覆盖（重试不产生重复实体）；version 缺失 → 1
       const idx = arr.findIndex((e) => e && e.id === resolvedEntity.id)
-      if (idx >= 0) arr[idx] = resolvedEntity
-      else arr.push(resolvedEntity)
-      return { ok: true, type: m.type, id: resolvedEntity.id, entity: resolvedEntity }
+      const created = { ...resolvedEntity, version: entityVersion(resolvedEntity) }
+      if (idx >= 0) arr[idx] = created
+      else arr.push(created)
+      return { ok: true, type: m.type, id: created.id, entity: created }
     }
 
     // update
@@ -304,8 +336,15 @@ function createMutationEngine({ storageFile, write, onPersisted }) {
         }
       }
     }
-    arr[idx] = resolvedEntity
-    return { ok: true, type: m.type, id: resolvedEntity.id, entity: resolvedEntity }
+    // Phase 1B-3B：update 版本检查 —— baseVersion 与权威 actualVersion 不一致 → conflict（NO APPLY / NO PERSIST / NO STATE-SYNC）
+    // 注意：必须在任何修改之前检测；缺失 baseVersion（旧客户端）→ 无版本检查（兼容）
+    const actualVersion = entityVersion(arr[idx])
+    const baseVersion = mutationBaseVersion(m)
+    if (baseVersion !== null && baseVersion !== actualVersion) {
+      return conflictResult(kind, m.id, baseVersion, actualVersion, arr[idx])
+    }
+    arr[idx] = { ...resolvedEntity, version: actualVersion + 1 }
+    return { ok: true, type: m.type, id: resolvedEntity.id, entity: arr[idx] }
   }
 
   // 批处理：读取权威 → working copy → 依次 apply → 全部成功 → 验证 → 一次性持久化
@@ -348,7 +387,16 @@ function createMutationEngine({ storageFile, write, onPersisted }) {
       const r = applyOne(working, list[i], batchCtx)
       results.push(r)
       if (!r.ok) {
-        return { ok: false, error: r.error, failedIndex: i, detail: r.detail || '', results }
+        const out = { ok: false, error: r.error, failedIndex: i, detail: r.detail || '', results }
+        // Phase 1B-3B：conflict 详情（IPC/HTTP 统一透传，§13）
+        if (r.error === 'conflict') {
+          out.entityType = r.entityType
+          out.entityId = r.entityId
+          out.expectedVersion = r.expectedVersion
+          out.actualVersion = r.actualVersion
+          out.currentEntity = r.currentEntity
+        }
+        return out
       }
     }
     // 验证最终 working state（宽松结构校验：顶层数组字段必须仍是数组）

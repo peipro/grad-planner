@@ -26,6 +26,7 @@ function makeTask(id, overrides = {}) {
     priority: 'medium',
     status: 'todo',
     createdAt: '2026-08-14T00:00:00.000Z',
+    version: 1,
     ...overrides,
   }
 }
@@ -38,6 +39,7 @@ function makeNote(id, overrides = {}) {
     tags: [],
     createdAt: '2026-08-14T00:00:00.000Z',
     updatedAt: '2026-08-14T00:00:00.000Z',
+    version: 1,
     ...overrides,
   }
 }
@@ -81,7 +83,7 @@ test('task.update → 替换实体；id 不存在 → entity_not_found 且不写
   const upd = makeTask('t1', { title: 'updated', status: 'done' })
   const ok = engine.applyMutations([{ type: 'task.update', id: 't1', entity: upd }])
   assert.strictEqual(ok.ok, true)
-  assert.deepStrictEqual(engine.getState().tasks[0], upd)
+  assert.deepStrictEqual(engine.getState().tasks[0], { ...upd, version: 2 })
 
   // 不存在的 id → entity_not_found
   const missing = engine.applyMutations([{ type: 'task.update', id: 'nope', entity: makeTask('nope') }])
@@ -120,7 +122,7 @@ test('note.create / note.update / note.delete', () => {
 
   const upd = makeNote('n1', { title: 'Note updated', content: 'new content' })
   assert.strictEqual(engine.applyMutations([{ type: 'note.update', id: 'n1', entity: upd }]).ok, true)
-  assert.deepStrictEqual(engine.getState().notes[0], upd)
+  assert.deepStrictEqual(engine.getState().notes[0], { ...upd, version: 2 })
 
   assert.strictEqual(engine.applyMutations([{ type: 'note.delete', id: 'n1' }]).ok, true)
   assert.strictEqual(engine.getState().notes.length, 0)

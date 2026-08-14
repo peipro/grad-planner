@@ -24,11 +24,11 @@ function readState(file) {
 }
 
 function makeEvent(id, overrides = {}) {
-  return { id, title: `Event ${id}`, start: '2026-09-01T09:00', end: '2026-09-01T10:00', type: 'meeting', ...overrides }
+  return { id, title: `Event ${id}`, start: '2026-09-01T09:00', end: '2026-09-01T10:00', type: 'meeting', version: 1, ...overrides }
 }
 
 function makeProject(id, overrides = {}) {
-  return { id, name: `Project ${id}`, color: 'blue', ...overrides }
+  return { id, name: `Project ${id}`, color: 'blue', version: 1, ...overrides }
 }
 
 // ===== Event =====
@@ -51,7 +51,7 @@ test('event.update → 替换；不存在 id → entity_not_found 不写盘', ()
 
   const upd = makeEvent('e1', { title: 'Event updated', type: 'deadline' })
   assert.strictEqual(engine.applyMutations([{ type: 'event.update', id: 'e1', entity: upd }]).ok, true)
-  assert.deepStrictEqual(engine.getState().events[0], upd)
+  assert.deepStrictEqual(engine.getState().events[0], { ...upd, version: 2 })
 
   const missing = engine.applyMutations([{ type: 'event.update', id: 'nope', entity: makeEvent('nope') }])
   assert.strictEqual(missing.ok, false)
@@ -79,7 +79,7 @@ test('project.create / update / delete（普通删除）', () => {
 
   const upd = makeProject('p1', { name: 'Project updated', color: 'green' })
   assert.strictEqual(engine.applyMutations([{ type: 'project.update', id: 'p1', entity: upd }]).ok, true)
-  assert.deepStrictEqual(engine.getState().projects[0], upd)
+  assert.deepStrictEqual(engine.getState().projects[0], { ...upd, version: 2 })
 
   assert.strictEqual(engine.applyMutations([{ type: 'project.delete', id: 'p1' }]).ok, true)
   assert.strictEqual(engine.getState().projects.length, 0)

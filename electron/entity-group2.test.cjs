@@ -14,23 +14,23 @@ function tmpFile() {
 }
 
 function makeMilestone(id, overrides = {}) {
-  return { id, title: `M${id}`, startDate: '2026-09-01', endDate: '2026-10-01', progress: 0, color: 'blue', checkpoints: [], ...overrides }
+  return { id, title: `M${id}`, startDate: '2026-09-01', endDate: '2026-10-01', progress: 0, color: 'blue', checkpoints: [], version: 1, ...overrides }
 }
 
 function makePaper(id, overrides = {}) {
-  return { id, title: `P${id}`, authors: 'a', year: 2026, stage: '未分类', category: '核心', status: 'unread', createdAt: 'x', ...overrides }
+  return { id, title: `P${id}`, authors: 'a', year: 2026, stage: '未分类', category: '核心', status: 'unread', createdAt: 'x', version: 1, ...overrides }
 }
 
 function makeHabit(id, overrides = {}) {
-  return { id, name: `H${id}`, emoji: 'e', weeklyTarget: 3, records: [], createdAt: 'x', ...overrides }
+  return { id, name: `H${id}`, emoji: 'e', weeklyTarget: 3, records: [], createdAt: 'x', version: 1, ...overrides }
 }
 
 function makeBirthday(id, overrides = {}) {
-  return { id, name: `B${id}`, calendarType: 'solar', solarMonth: 1, solarDay: 1, emoji: 'e', createdAt: 'x', ...overrides }
+  return { id, name: `B${id}`, calendarType: 'solar', solarMonth: 1, solarDay: 1, emoji: 'e', createdAt: 'x', version: 1, ...overrides }
 }
 
 function makePomodoro(id, overrides = {}) {
-  return { id, taskTitle: `Pomo ${id}`, minutes: 25, completedAt: '2026-09-01T10:00:00.000Z', ...overrides }
+  return { id, taskTitle: `Pomo ${id}`, minutes: 25, completedAt: '2026-09-01T10:00:00.000Z', version: 1, ...overrides }
 }
 
 // ===== Milestone =====
@@ -44,7 +44,7 @@ test('milestone.create / update / delete', () => {
 
   const upd = makeMilestone('m1', { title: 'M1 updated', progress: 50, checkpoints: [{ id: 'c1', title: 'cp', done: false }] })
   assert.strictEqual(engine.applyMutations([{ type: 'milestone.update', id: 'm1', entity: upd }]).ok, true)
-  assert.deepStrictEqual(engine.getState().milestones[0], upd)
+  assert.deepStrictEqual(engine.getState().milestones[0], { ...upd, version: 2 })
 
   const missing = engine.applyMutations([{ type: 'milestone.update', id: 'nope', entity: makeMilestone('nope') }])
   assert.strictEqual(missing.ok, false)
@@ -76,7 +76,7 @@ test('paper.create / update / delete（含 stage 字段与 paperStages 关联）
 
   const upd = makePaper('p1', { stage: '阶段1', status: 'reading' })
   assert.strictEqual(engine.applyMutations([{ type: 'paper.update', id: 'p1', entity: upd }]).ok, true)
-  assert.deepStrictEqual(engine.getState().papers[0], upd)
+  assert.deepStrictEqual(engine.getState().papers[0], { ...upd, version: 2 })
 
   assert.strictEqual(engine.applyMutations([{ type: 'paper.delete', id: 'p1' }]).ok, true)
   assert.strictEqual(engine.getState().papers.length, 0)
@@ -126,7 +126,7 @@ test('habit.create / update / delete（records 数组字段）', () => {
 
   const upd = makeHabit('h1', { records: ['2026-09-01', '2026-09-02'], weeklyTarget: 5 })
   assert.strictEqual(engine.applyMutations([{ type: 'habit.update', id: 'h1', entity: upd }]).ok, true)
-  assert.deepStrictEqual(engine.getState().habits[0], upd)
+  assert.deepStrictEqual(engine.getState().habits[0], { ...upd, version: 2 })
 
   assert.strictEqual(engine.applyMutations([{ type: 'habit.delete', id: 'h1' }]).ok, true)
   assert.strictEqual(engine.getState().habits.length, 0)

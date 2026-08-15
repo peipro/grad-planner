@@ -1,7 +1,7 @@
 {
   "name": "grad-planner",
   "private": true,
-  "version": "1.0.0",
+  "version": "1.1.0",
   "description": "研途计划 - 研究生计划与日程管理桌面工具",
   "author": "grad-planner",
   "type": "module",

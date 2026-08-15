@@ -528,7 +528,7 @@ export default function SettingsView() {
       <div className="card" style={{ marginTop: 20, padding: 18 }}>
         <div className="setting-title">关于</div>
         <div style={{ fontSize: 13, color: 'var(--text-2)', lineHeight: 1.8 }}>
-          <div>研途计划 v0.2.0 — 研究生计划与日程管理工具</div>
+          <div>研途计划 v1.1.0 — 研究生计划与日程管理工具</div>
           <div>功能：日历 / 待办 / 里程碑 / 笔记 / 番茄钟 / 生日 / 统计 / 资讯 / 翻译</div>
           <div>数据保存在本地，开启自动备份后写入磁盘（软件目录 data\backups\），可在本页恢复</div>
         </div>

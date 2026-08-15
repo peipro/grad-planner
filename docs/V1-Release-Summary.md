@@ -221,9 +221,9 @@ Phase 2B Today 2.0 / 每日入口（1ada3ff）
          解决："打开不知道今天做什么" → Today 时间线 + Task.area + 内联执行
 Phase 2C Quick Capture（1bfd6c1）
          解决：一句话记录 → 任务/日程/笔记；确定性日期解析（修复 Unicode 星期与下周跨周 bug）
-Phase 3  V1 Final Audit + Polish（277a3cc → 2adccdf → 5f11186 → 80f4b00 → 5a93ee3 → ed084fb）
+Phase 3  V1 Final Audit + Polish（277a3cc → 2adccdf → 5f11186 → 80f4b00 → 5a93ee3 → e1e00d8）
          解决：审计 + 6 个高频断点（见 §8）
-最终：  V1.0 = ed084fb（tag v1-polish-pomodoro-timezone）
+最终：  V1.0 = e1e00d8（tag v1.0.0）
 ```
 
 ---
@@ -255,7 +255,7 @@ Phase 3  V1 Final Audit + Polish（277a3cc → 2adccdf → 5f11186 → 80f4b00 �
 ### 9.1 自动化（V1.0 基线实际输出）
 | 命令 | 结果 |
 |---|---|
-| `npm test`（vitest，官方测试命令） | **16 文件 / 247 tests PASS** |
+| `npm test`（vitest，官方测试命令） | **17 文件 / 251 tests PASS** |
 | `npm run build`（tsc + vite build） | **PASS**（仅 chunk 体积提示，非错误） |
 | `npm run lint`（eslint src） | **0 errors / 1 warning**（NewsView `useCallback` 缺依赖，历史既有，非阻塞） |
 | `node --test` | **156 pass / 10 fail（历史兼容问题，见下）** |
@@ -393,4 +393,4 @@ Phase 3  V1 Final Audit + Polish（277a3cc → 2adccdf → 5f11186 → 80f4b00 �
 
 ---
 
-*文档生成：基于 `ed084fb`（V1.0）实际仓库状态。* *测试数据：`npm test` 247 passed / `npm run build` PASS / `npm run lint` 0 errors / `node --test` 156 pass + 10 历史兼容失败（见 §9）。*
+*文档生成：基于 `e1e00d8`（V1.0）实际仓库状态。* *测试数据：`npm test` 251 passed / `npm run build` PASS / `npm run lint` 0 errors / `node --test` 156 pass + 10 历史兼容失败（见 §9）。*

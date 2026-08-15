@@ -6,7 +6,7 @@ import { useStore, uid } from '../store'
 import { parseQuickAdd, taskDueOf } from '../lib/natural'
 import { formatMinutes } from '../lib/format'
 import {
-  localDateKey, todayItems, overdueTasks, todayFocusMinutes,
+  localDateKey, todayItems, overdueTasks, todayFocusMinutes, focusMinutesForTask,
   AREA_LABELS, AREA_COLORS, TodayItem,
 } from '../lib/today'
 import { EventType, Task } from '../types'
@@ -62,6 +62,13 @@ export default function TodayView({ onQuickCapture }: { onQuickCapture?: () => v
     updateTask({ ...t, status: t.status === 'done' ? 'todo' : 'done' })
   }
 
+  // 专注该任务：绑定 taskId/taskTitle 启动番茄（已有进行中的番茄则跳到番茄钟页管理）
+  const startFocus = (t: Task) => {
+    const s = useStore.getState()
+    if (s.pomo.running) { gotoView('pomodoro'); return }
+    setPomodoro({ mode: 'countdown', phase: 'focus', remaining: s.pomo.focusMin * 60, running: true, taskId: t.id, taskTitle: t.title })
+  }
+
   const quickSave = () => {
     const raw = quickInput.trim()
     if (!raw) return
@@ -96,6 +103,8 @@ export default function TodayView({ onQuickCapture }: { onQuickCapture?: () => v
     const t = it.raw as Task
     const color = AREA_COLORS[it.area ?? 'other']
     const muted = it.done || (it.time !== 'all-day' && it.time < nowHm)
+    // 今日该任务的专注分钟（本地日期换算，与 Stats 同语义）
+    const focus = focusMinutesForTask(pomodoros, t.id, t.title, dateKey)
     return (
       <div key={it.id} className="tl-row" style={{ opacity: muted ? 0.5 : 1 }}>
         <span className="tl-time">{it.time === 'all-day' ? '全天' : it.time}</span>
@@ -108,6 +117,12 @@ export default function TodayView({ onQuickCapture }: { onQuickCapture?: () => v
           {it.done ? <CheckSquare size={17} /> : <Square size={17} />}
         </button>
         <span className="tl-title" style={it.done ? { textDecoration: 'line-through' } : {}}>{it.title}</span>
+        <button className="tl-focus" title="专注这个任务" onClick={() => startFocus(t)}>
+          <Timer size={14} />
+        </button>
+        {focus.minutes > 0 && (
+          <span className="tl-tag" style={{ background: 'var(--accent-soft)', color: 'var(--accent-text)' }}>🍅 {formatMinutes(focus.minutes)}</span>
+        )}
         <span className="tl-tag" style={{ background: `${color}1a`, color }}>{AREA_LABELS[it.area ?? 'other']}</span>
       </div>
     )
@@ -293,6 +308,12 @@ export default function TodayView({ onQuickCapture }: { onQuickCapture?: () => v
         .tl-check { display: inline-flex; align-items: center; justify-content: center; flex-shrink: 0; }
         .tl-dot { width: 9px; height: 9px; border-radius: 3px; flex-shrink: 0; margin: 0 4px; }
         .tl-title { flex: 1; min-width: 0; font-size: 14px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+        .tl-focus {
+          display: inline-flex; align-items: center; justify-content: center;
+          width: 26px; height: 26px; border-radius: 7px; color: var(--text-3); flex-shrink: 0;
+          transition: all 0.15s ease;
+        }
+        .tl-focus:hover { background: var(--accent-soft); color: var(--accent-text); }
         .tl-tag { font-size: 11px; font-weight: 600; padding: 2px 8px; border-radius: 999px; flex-shrink: 0; }
 
         .side-card { padding: 14px 16px; }

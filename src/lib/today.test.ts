@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { localDateKey, todayItems, isAllDayDue, overdueTasks, todayFocusMinutes } from './today'
+import { localDateKey, todayItems, isAllDayDue, overdueTasks, todayFocusMinutes, focusMinutesForTask } from './today'
 import { Task, CalEvent } from '../types'
 
 const task = (id: string, over: Partial<Task> = {}): Task => ({
@@ -90,5 +90,34 @@ describe('todayFocusMinutes', () => {
       { id: 'p2', taskTitle: 'x', minutes: 50, completedAt: '2026-08-14T10:00:00.000Z' },
     ]
     expect(todayFocusMinutes(pomodoros as any, '2026-08-15')).toBe(25)
+  })
+})
+
+describe('focusMinutesForTask（Phase 3 #4：Pomodoro ↔ Task 聚合）', () => {
+  const pomos = [
+    { id: 'p1', taskTitle: '读LSTM', minutes: 25, completedAt: '2026-08-15T04:00:00.000Z', taskId: 't1' },
+    { id: 'p2', taskTitle: '读LSTM', minutes: 50, completedAt: '2026-08-15T06:00:00.000Z', taskId: 't1' },
+    { id: 'p3', taskTitle: '买洗衣液', minutes: 25, completedAt: '2026-08-14T10:00:00.000Z' },
+    { id: 'p4', taskTitle: '读LSTM', minutes: 25, completedAt: '2026-08-14T10:00:00.000Z' }, // 旧记录：无 taskId 仅标题
+  ]
+
+  it('按 taskId 聚合：同 id 新记录 + 无 id 旧记录（标题一致）', () => {
+    const f = focusMinutesForTask(pomos as any, 't1', '读LSTM')
+    expect(f.minutes).toBe(100) // p1+p2（id 匹配）+ p4（旧记录标题匹配）
+    expect(f.count).toBe(3)
+  })
+
+  it('无 taskId 时按标题匹配全部', () => {
+    const f = focusMinutesForTask(pomos as any, undefined, '读LSTM')
+    expect(f.minutes).toBe(100)
+  })
+
+  it('dateKey 限定当天（本地日期换算，非 UTC 字符串比对）', () => {
+    expect(focusMinutesForTask(pomos as any, 't1', '读LSTM', '2026-08-15').minutes).toBe(75) // p1+p2 在 8-15 本地日
+    expect(focusMinutesForTask(pomos as any, undefined, '读LSTM', '2026-08-14').minutes).toBe(25) // p4 在 8-14 本地日
+  })
+
+  it('不匹配的任务 → 0', () => {
+    expect(focusMinutesForTask(pomos as any, 't999', '不存在').minutes).toBe(0)
   })
 })

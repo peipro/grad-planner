@@ -32,6 +32,7 @@ beforeEach(() => {
       { id: 'p2', taskTitle: '昨天的', minutes: 50, completedAt: '2026-08-14T10:00:00.000Z' },
     ],
     projects: [],
+    pomo: { mode: 'countdown', focusMin: 25, breakMin: 5, remaining: 1500, running: false, phase: 'focus', taskTitle: '', taskId: undefined, swSec: 0, swRunning: false },
   } as any)
 })
 
@@ -175,5 +176,27 @@ describe('TodayView 底部轻操作', () => {
     expect(s.running).toBe(true)
     expect(s.phase).toBe('focus')
     expect(s.remaining).toBe(25 * 60)
+  })
+})
+
+describe('Pomodoro ↔ Task（Phase 3 #4）', () => {
+  it('任务行 🍅 按钮：启动绑定该任务的番茄钟', () => {
+    render(<TodayView />)
+    const row = screen.getByText('买洗衣液').closest('.tl-row') as HTMLElement
+    fireEvent.click(within(row).getByTitle('专注这个任务'))
+    const s = useStore.getState().pomo
+    expect(s.running).toBe(true)
+    expect(s.taskId).toBe('t1')
+    expect(s.taskTitle).toBe('买洗衣液')
+  })
+
+  it('任务行显示今日该任务专注分钟', () => {
+    useStore.setState({
+      pomodoros: [
+        { id: 'pf1', taskTitle: '买洗衣液', minutes: 25, completedAt: '2026-08-15T04:00:00.000Z', taskId: 't1' },
+      ],
+    } as any)
+    render(<TodayView />)
+    expect(screen.getByText('🍅 25 min')).toBeTruthy()
   })
 })

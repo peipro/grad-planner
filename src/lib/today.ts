@@ -104,3 +104,33 @@ export function todayFocusMinutes(pomodoros: { completedAt?: string; minutes: nu
     .filter((p) => p.completedAt && p.completedAt.startsWith(dateKey))
     .reduce((sum, p) => sum + p.minutes, 0)
 }
+
+/**
+ * 某任务的专注聚合（优先 taskId，兼容旧记录按标题匹配）。
+ * dateKey 可选：传入则只统计该本地日期（用本地时区换算 completedAt，杜绝 UTC 混用）。
+ */
+export function focusMinutesForTask(
+  pomodoros: { taskId?: string; taskTitle: string; minutes: number; completedAt: string }[],
+  taskId: string | undefined,
+  taskTitle: string,
+  dateKey?: string,
+): { count: number; minutes: number } {
+  let count = 0
+  let minutes = 0
+  for (const p of pomodoros) {
+    // 有 taskId：匹配同 id 新记录 + 无 id 旧记录（标题一致）；无 taskId：仅按标题
+    const match = taskId
+      ? p.taskId === taskId || (!p.taskId && p.taskTitle === taskTitle)
+      : p.taskTitle === taskTitle
+    if (!match) continue
+    if (dateKey) {
+      const d = new Date(p.completedAt)
+      if (isNaN(d.getTime())) continue
+      const local = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`
+      if (local !== dateKey) continue
+    }
+    count += 1
+    minutes += p.minutes
+  }
+  return { count, minutes }
+}

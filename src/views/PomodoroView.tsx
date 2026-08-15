@@ -15,7 +15,7 @@ export default function PomodoroView() {
   const clearPomodoros = useStore((s) => s.clearPomodoros)
   const tasks = useStore((s) => s.tasks)
 
-  const { mode, focusMin, breakMin, remaining, running, phase, taskTitle, swSec, swRunning } = pomo
+  const { mode, focusMin, breakMin, remaining, running, phase, taskTitle, taskId, swSec, swRunning } = pomo
 
   const switchMode = (m: 'countdown' | 'stopwatch') => {
     setPomodoro({ mode: m, running: false, swRunning: false })
@@ -111,19 +111,27 @@ export default function PomodoroView() {
           )}
 
           <div className="pomo-input">
-            <input
-              list="pomo-task-options"
-              value={taskTitle}
+            <select
+              value={taskId ?? ''}
               onChange={(e) => {
-                const v = e.target.value
-                const matched = tasks.find((t) => t.title === v)
-                setPomodoro({ taskTitle: v, taskId: matched?.id })
+                const id = e.target.value
+                const t = tasks.find((x) => x.id === id)
+                setPomodoro({ taskId: id || undefined, taskTitle: t?.title ?? '' })
               }}
-              placeholder="关联待办任务或自由输入…"
-            />
-            <datalist id="pomo-task-options">
-              {tasks.map((t) => <option key={t.id} value={t.title} />)}
-            </datalist>
+            >
+              <option value="">不关联任务 · 自由专注</option>
+              {tasks.filter((t) => t.status !== 'done').map((t) => (
+                <option key={t.id} value={t.id}>{t.title}</option>
+              ))}
+            </select>
+            {!taskId && (
+              <input
+                value={taskTitle}
+                onChange={(e) => setPomodoro({ taskTitle: e.target.value })}
+                placeholder="自由专注名称（可选）"
+                style={{ marginTop: 8 }}
+              />
+            )}
           </div>
 
           <div style={{ display: 'flex', justifyContent: 'center', gap: 12, marginTop: 18, flexWrap: 'wrap' }}>
@@ -196,6 +204,10 @@ export default function PomodoroView() {
         .pomo-time { font-size: 38px; font-weight: 800; font-variant-numeric: tabular-nums; }
         .pomo-phase-label { font-size: 12px; color: var(--text-3); margin-top: 2px; }
         .pomo-input { margin: 0 auto 16px; max-width: 320px; }
+        .pomo-input select {
+          width: 100%; padding: 9px 12px; border: 1px solid var(--border); border-radius: 9px;
+          background: var(--bg); color: var(--text-1); font-size: 13px; text-align: center;
+        }
         .pomo-input input {
           width: 100%; padding: 9px 12px; border: 1px solid var(--border); border-radius: 9px;
           background: var(--bg); color: var(--text-1); font-size: 13px; text-align: center;

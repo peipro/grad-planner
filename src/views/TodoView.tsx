@@ -5,6 +5,8 @@ import { useStore, uid, Project } from '../store'
 import { useToast } from '../lib/toast'
 import { parseQuickAdd, taskDueOf } from '../lib/natural'
 import { classifyQuadrant, overdueDays } from '../lib/task'
+import { focusMinutesForTask } from '../lib/today'
+import { formatMinutes } from '../lib/format'
 import { Priority, Task, TaskStatus, TaskArea } from '../types'
 import PromptModal from '../components/PromptModal'
 import DatePicker from '../components/DatePicker'
@@ -48,6 +50,7 @@ export default function TodoView() {
   const [subTarget, setSubTarget] = useState<Task | null>(null)
 
   const tasks = useStore((s) => s.tasks)
+  const pomodoros = useStore((s) => s.pomodoros)
   const projects = useStore((s) => s.projects)
   const milestones = useStore((s) => s.milestones)
   // Phase 2A：项目关联面板
@@ -261,6 +264,11 @@ export default function TodoView() {
               </>
             )}
             {hasSubs && <span className="todo-due">{doneSubs}/{subs.length} 子任务</span>}
+            {(() => {
+              const f = focusMinutesForTask(pomodoros, t.id, t.title)
+              if (!f.minutes) return null
+              return <span className="todo-due" title={`专注 ${f.count} 次 · 共 ${formatMinutes(f.minutes)}`}>🍅 {formatMinutes(f.minutes)}</span>
+            })()}
           </div>
           {isOpen && hasSubs && (
             <div className="subtask-list">

@@ -58,9 +58,13 @@ export function mergeAuthoritativeState(persisted: unknown, current: PlannerStat
 /**
  * 应用权威 state 到 Zustand（不 reload、不重新 hydration）。
  * 防循环：先标记 sync-adapter 权威基准 → 随后的 persist setItem diff 为空 → 不产生 mutation。
+ * P1 修复：本地存在未同步修改（网络提交失败、等待补交）时跳过权威覆盖，
+ * 避免用户刚做的编辑被 state-sync 静默抹掉；等补交成功后由下一次 state-sync 收敛。
  */
 export function applyAuthoritativeState(state: unknown): void {
   if (!state || typeof state !== 'object' || Array.isArray(state)) return
+  const hasPending = (window as any).__gradSyncHasPendingUnsynced
+  if (typeof hasPending === 'function' && hasPending()) return
   const sync = (window as any).__gradSyncMarkAuthoritative
   if (typeof sync === 'function') sync(state)
   useStore.setState(mergeAuthoritativeState(state, useStore.getState()))

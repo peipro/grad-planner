@@ -477,6 +477,41 @@ describe('applyAuthoritativeState（state-sync 应用路径）', () => {
   })
 })
 
+// ===== P1 修复：网络失败不丢修改 + state-sync 不覆盖未同步修改 =====
+
+describe('P1：网络失败不丢修改', () => {
+  it('network_error → 不推进基准 → 下次修改重新提交未同步的修改', async () => {
+    const errors: string[] = []
+    window.addEventListener('sync-mutation-failed', (e) => errors.push(((e as CustomEvent).detail || {}).error))
+    // 首次编辑 t1，提交失败（网络）
+    mockResult = { ok: false, error: 'network_error' }
+    window.localStorage.setItem(SYNC_KEY, persistStr({ tasks: [makeTask('t1')], notes: [], pomo: {} }))
+    await flushAndWait()
+    expect(errors).toEqual(['network_error'])
+    expect(mockCalls).toHaveLength(1) // t1.create 已提交（但失败）
+    // 网络恢复，用户再新增 t2 → 应把 t1 与 t2 一起提交（t1 未丢失、未重试也未被丢弃）
+    errors.length = 0
+    mockResult = { ok: true, results: [] }
+    window.localStorage.setItem(SYNC_KEY, persistStr({ tasks: [makeTask('t1'), makeTask('t2')], notes: [], pomo: {} }))
+    await flushAndWait()
+    const ids = mockCalls[mockCalls.length - 1].map((m: any) => m.id || (m.payload && m.payload.id)).sort()
+    expect(ids).toEqual(['t1', 't2'])
+    expect(errors).toEqual([]) // 成功提交，无失败事件
+  })
+
+  it('存在未同步修改时 applyAuthoritativeState 不覆盖本地', async () => {
+    // 建立本地未同步修改：编辑 local，提交失败（网络）
+    mockResult = { ok: false, error: 'network_error' }
+    window.localStorage.setItem(SYNC_KEY, persistStr({ tasks: [makeTask('local', { title: '本地未同步' })], notes: [], pomo: {} }))
+    await flushAndWait()
+    // 权威广播不同内容 → 因本地有未同步修改，应跳过，本地不被覆盖
+    useStore.setState({ tasks: [makeTask('local', { title: '本地未同步' })], notes: [] } as any)
+    applyAuthoritativeState({ tasks: [makeTask('authority', { title: '权威' })], notes: [], paperStages: [] })
+    expect(useStore.getState().tasks.map((t) => t.id)).toEqual(['local'])
+    expect(useStore.getState().tasks[0].title).toBe('本地未同步')
+  })
+})
+
 
 // ===== Phase 2A：关系变更走 mutation 同步（§27） =====
 

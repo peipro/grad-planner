@@ -39,6 +39,11 @@
   var flushTimer = null
   var FLUSH_MS = 300
   var pollTimer = null // Phase 1B-2：平板端权威轮询
+  // P1 修复：网络失败绝不推进基准（否则失败 diff 被丢弃且永不重试）。
+  //   hasPendingUnsynced  —— 存在未同步的本地修改（网络失败/提交节流窗口内），state-sync 不得覆盖
+  //   networkErrorNotified —— 网络失败只提示一次，避免轮询重试反复弹 toast
+  var hasPendingUnsynced = false
+  var networkErrorNotified = false
 
   // 解析 zustand persist 真实 payload：{ state, version }
   function parsePersist(str) {
@@ -118,12 +123,33 @@
   // 提交一批 mutation（IPC 或 HTTP，进入同一个 main-process mutation engine）
   function submit(batch) {
     var handle = function (res) {
-      // 无论成功/失败，基准推进到最近一次 diff 的 state（失败不重试，避免无限循环）
+      var error = (res && res.error) || 'network_error'
+      if (res && res.ok) {
+        // 成功：权威已推进到 lastDiffState，基准前进，待同步状态清零
+        if (lastDiffState) baseState = lastDiffState
+        pendingMutations = []
+        hasPendingUnsynced = false
+        networkErrorNotified = false
+        return
+      }
+      if (error === 'network_error') {
+        // 网络失败（可重试）：绝不推进基准，保留 lastDiffState 作为待同步内容，
+        // 由平板轮询（pollAuthority）与下一次修改自动补交；期间 state-sync 不得覆盖本地。
+        hasPendingUnsynced = true
+        if (!networkErrorNotified) {
+          networkErrorNotified = true
+          dispatchFailed({ error: 'network_error' })
+        }
+        return
+      }
+      // 明确拒绝（conflict/validation/invalid/not_found/persistence）：重试无意义，
+      // 推进基准避免死循环；draft 由 renderer 按错误码分类处理（conflict 保留本地）。
       if (lastDiffState) baseState = lastDiffState
-      if (res && res.ok) return
-      var detail = { error: (res && res.error) || 'network_error' }
+      pendingMutations = []
+      hasPendingUnsynced = false
+      var detail = { error: error }
       // Phase 1B-3B：conflict 详情透传（§13，与 IPC/HTTP 语义一致）
-      if (res && res.error === 'conflict') {
+      if (error === 'conflict') {
         detail.entityType = res.entityType
         detail.entityId = res.entityId
         detail.expectedVersion = res.expectedVersion
@@ -158,6 +184,15 @@
     if (pendingMutations.length === 0) return
     var batch = pendingMutations
     pendingMutations = []
+    submit(batch)
+  }
+
+  // 网络失败后补交未同步修改（由平板轮询每 5s 触发一次，网络恢复后自动收敛；
+  // 桌面端下一次 setItem 时 diff 会重新包含未同步修改，同样会补交）。
+  function retryPending() {
+    if (!hasPendingUnsynced || !baseState || !lastDiffState) return
+    var batch = diffMutations(baseState, lastDiffState)
+    if (batch.length === 0) { hasPendingUnsynced = false; return }
     submit(batch)
   }
 
@@ -236,7 +271,14 @@
     baseState = state || null
     lastDiffState = state || null
     pendingMutations = []
+    hasPendingUnsynced = false
     if (flushTimer) { clearTimeout(flushTimer); flushTimer = null }
+  }
+
+  // P1 修复：renderer 查询"是否存在未同步的本地修改"。applyAuthoritativeState 据此
+  // 跳过权威覆盖，避免网络失败/提交中的本地编辑被 state-sync 静默抹掉。
+  window.__gradSyncHasPendingUnsynced = function () {
+    return hasPendingUnsynced
   }
 
   // Phase 1B-2：平板端轻量轮询权威内容变化（无 Main 推送机制下的最小方案）。
@@ -245,6 +287,7 @@
     var pollText = null
     var POLL_MS = 5000
     function pollAuthority() {
+      retryPending() // 网络恢复后自动补交未同步修改（失败则等待下一轮）
       fetch(STORAGE_PATH, { cache: 'no-store' })
         .then(function (r) { return r.ok ? r.text() : null })
         .then(function (text) {

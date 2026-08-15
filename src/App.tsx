@@ -111,7 +111,7 @@ export default function App() {
           onAction: () => refreshFromAuthority(),
         })
       } else if (err === 'network_error') {
-        useToast.getState().show('网络不可用，本次修改未同步（将在下次操作时重新尝试）')
+        useToast.getState().show('网络不可用，本次修改已保存在本机，网络恢复后将自动同步')
       } else if (err === 'invalid_mutation' || err === 'validation_failure' || err === 'entity_not_found') {
         useToast.getState().show('同步失败：本次修改未通过校验，未写入')
       } else {

@@ -5,9 +5,10 @@ import { useStore, uid, Project } from '../store'
 import { useToast } from '../lib/toast'
 import { parseQuickAdd } from '../lib/natural'
 import { classifyQuadrant, overdueDays } from '../lib/task'
-import { Priority, Task, TaskStatus } from '../types'
+import { Priority, Task, TaskStatus, TaskArea } from '../types'
 import PromptModal from '../components/PromptModal'
 import DatePicker from '../components/DatePicker'
+import { AREA_LABELS, AREA_COLORS } from '../lib/today'
 import {
   papersOfProject, notesOfProject,
   linkPaperProject, unlinkPaperProject,
@@ -41,7 +42,7 @@ export default function TodoView() {
   const [editingTask, setEditingTask] = useState<Task | null>(null)
   const [projectModal, setProjectModal] = useState(false)
   const [activeProject, setActiveProject] = useState<string | null>(null)
-  const [form, setForm] = useState({ title: '', priority: 'medium' as Priority, due: '', status: 'todo' as TaskStatus, projectId: '', subtask: '' })
+  const [form, setForm] = useState({ title: '', priority: 'medium' as Priority, due: '', status: 'todo' as TaskStatus, projectId: '', subtask: '', area: '' as '' | TaskArea })
   const [expanded, setExpanded] = useState<Set<string>>(new Set())
   const [newProject, setNewProject] = useState({ name: '', color: PROJECT_COLORS[0] })
   const [subTarget, setSubTarget] = useState<Task | null>(null)
@@ -111,6 +112,7 @@ export default function TodoView() {
       status: 'todo',
       due: parsed.date ? `${parsed.date}T12:00:00` : undefined,
       projectId: activeProject ?? undefined,
+      area: parsed.area,
       subtasks: [],
       createdAt: new Date().toISOString(),
     })
@@ -128,14 +130,15 @@ export default function TodoView() {
         due: form.due || undefined,
         status: form.status,
         projectId: form.projectId || undefined,
+        area: form.area || undefined,
         subtasks: subtasks ?? editingTask.subtasks ?? [],
       })
     } else {
-      addTask({ id: uid(), title: form.title, priority: form.priority, due: form.due || undefined, status: form.status, projectId: form.projectId || undefined, subtasks, createdAt: new Date().toISOString() })
+      addTask({ id: uid(), title: form.title, priority: form.priority, due: form.due || undefined, status: form.status, projectId: form.projectId || undefined, area: form.area || undefined, subtasks, createdAt: new Date().toISOString() })
     }
     setModalOpen(false)
     setEditingTask(null)
-    setForm({ title: '', priority: 'medium', due: '', status: 'todo', projectId: '', subtask: '' })
+    setForm({ title: '', priority: 'medium', due: '', status: 'todo', projectId: '', subtask: '', area: '' })
   }
 
   const openEdit = (t: Task) => {
@@ -147,6 +150,7 @@ export default function TodoView() {
       status: t.status,
       projectId: t.projectId ?? '',
       subtask: (t.subtasks ?? []).map((s) => s.title).join('\n'),
+      area: t.area ?? '',
     })
     setModalOpen(true)
   }
@@ -233,6 +237,11 @@ export default function TodoView() {
             {t.projectId && (
               <span className="project-badge" style={{ background: `${projectColor(t.projectId)}1a`, color: projectColor(t.projectId) }}>
                 {projectName(t.projectId)}
+              </span>
+            )}
+            {t.area && (
+              <span className="project-badge" style={{ background: `${AREA_COLORS[t.area]}1a`, color: AREA_COLORS[t.area] }}>
+                {AREA_LABELS[t.area]}
               </span>
             )}
             <span className={`priority-badge p-${t.priority}`}>
@@ -468,8 +477,14 @@ export default function TodoView() {
             </div>
             <div className="field-row">
               <div className="field">
-                <label>截止日期（可选）</label>
-                <DatePicker value={form.due} placeholder="不设置" onChange={(v) => setForm({ ...form, due: v ?? '' })} />
+                <label>领域（可选）</label>
+                <select value={form.area} onChange={(e) => setForm({ ...form, area: e.target.value as '' | TaskArea })}>
+                  <option value="">未分类</option>
+                  <option value="research">科研</option>
+                  <option value="study">学习</option>
+                  <option value="life">生活</option>
+                  <option value="other">其他</option>
+                </select>
               </div>
               <div className="field">
                 <label>所属项目</label>
@@ -477,6 +492,12 @@ export default function TodoView() {
                   <option value="">无</option>
                   {projects.map((p) => <option key={p.id} value={p.id}>{p.name}</option>)}
                 </select>
+              </div>
+            </div>
+            <div className="field-row">
+              <div className="field">
+                <label>截止日期（可选）</label>
+                <DatePicker value={form.due} placeholder="不设置" onChange={(v) => setForm({ ...form, due: v ?? '' })} />
               </div>
             </div>
             <div className="field">

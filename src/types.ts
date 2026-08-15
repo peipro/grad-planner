@@ -13,6 +13,10 @@ export interface CalEvent {
 export type Priority = 'high' | 'medium' | 'low'
 export type TaskStatus = 'todo' | 'doing' | 'done'
 
+// Phase 2B：Task 领域分类（Today 分区用）——不新建实体，仅轻量字段
+//   research=科研 · study=学习 · life=生活 · other=其他/杂务
+export type TaskArea = 'research' | 'study' | 'life' | 'other'
+
 export interface Subtask {
   id: string
   title: string
@@ -26,6 +30,7 @@ export interface Task {
   priority: Priority
   status: TaskStatus
   projectId?: string
+  area?: TaskArea
   subtasks?: Subtask[]
   createdAt: string
   version?: number

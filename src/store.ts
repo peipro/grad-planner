@@ -148,6 +148,8 @@ export const mergePersistedState = (persisted: unknown, current: PlannerState): 
   return {
     ...current,
     ...p,
+    // Phase 2B：Today 成为每日入口——旧默认视图 calendar 迁移到 today（其他视图保持原值）
+    activeView: p.activeView === 'calendar' ? 'today' : (p.activeView ?? 'today'),
     milestones: repairMilestones(p.milestones),
     pomo: { ...current.pomo, ...(p.pomo || {}), running: false, swRunning: false, endAt: undefined, swStartedAt: undefined },
     newsConfig: { ...current.newsConfig, ...(p.newsConfig || {}), xKey: '', xSecret: '' },
@@ -179,7 +181,7 @@ export const useStore = create<PlannerState>()(
         swRunning: false,
       },
       theme: { mode: 'light', accent: 'blue' },
-      activeView: 'calendar',
+      activeView: 'today',
       autoBackup: false,
       lastBackup: '',
       newsConfig: { xKey: '', xSecret: '', includeX: false, rssKeys: null, includeHot: true },

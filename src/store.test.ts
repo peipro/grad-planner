@@ -39,6 +39,20 @@ describe('mergePersistedState（持久化 merge 语义，hydration/导入/恢复
     expect(merged.newsConfig.rssKeys).toEqual(['openai'])
   })
 
+  it('Phase 2B：旧默认视图 calendar 迁移到 today（Today 成为每日入口）', () => {
+    const merged = mergePersistedState({ activeView: 'calendar' }, currentState())
+    expect(merged.activeView).toBe('today')
+  })
+
+  it('Phase 2B：非默认视图（如 notes）保持原值，不做迁移', () => {
+    const merged = mergePersistedState({ activeView: 'notes' }, currentState())
+    expect(merged.activeView).toBe('notes')
+  })
+
+  it('Phase 2B：activeView 默认值为 today', () => {
+    expect(currentState().activeView).toBe('today')
+  })
+
   it('newsConfig 密钥强制清空（与 partialize 对称，密钥不回写存储）', () => {
     const current = currentState()
     const persisted = {

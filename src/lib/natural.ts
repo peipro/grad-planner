@@ -1,4 +1,5 @@
 import { addDays, addWeeks, addMonths, addHours, format } from 'date-fns'
+import { TaskArea } from '../types'
 
 export interface ParsedQuickAdd {
   title: string
@@ -6,6 +7,7 @@ export interface ParsedQuickAdd {
   time?: string
   priority?: 'high' | 'medium' | 'low'
   type?: 'deadline' | 'meeting' | 'course' | 'personal'
+  area?: TaskArea
 }
 
 const WEEKDAYS: Record<string, number> = {
@@ -34,6 +36,25 @@ export function parseQuickAdd(text: string): ParsedQuickAdd {
   if (!result.priority && medPrio) {
     result.priority = 'medium'
     rest = rest.replace(medPrio[0], '')
+  }
+
+  // ---- area 领域分类（Phase 2B）：仅识别开头词 + 后跟空白/结尾，避免误伤标题内关键词 ----
+  const areaRules: Array<[RegExp, TaskArea]> = [
+    [/^(科研|研究)(?=\s|$)/, 'research'],
+    [/^(学习|课程|作业)(?=\s|$)/, 'study'],
+    [/^(生活|家务)(?=\s|$)/, 'life'],
+    [/^(杂务|杂事)(?=\s|$)/, 'other'],
+  ]
+  for (const [re, area] of areaRules) {
+    const m = rest.match(re)
+    if (m) {
+      const after = rest.slice(m[0].length).trim()
+      if (after) {
+        result.area = area
+        rest = after
+        break
+      }
+    }
   }
 
   // ---- 任务类型 ----

@@ -4,6 +4,7 @@
 //       仅在 openNote/createNote 时设置；store 更新（含 state-sync）不会重置 draft。
 
 import { describe, it, expect, beforeEach } from 'vitest'
+import { readFileSync } from 'node:fs'
 import { render, screen, act } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import NotesView from './NotesView'
@@ -97,7 +98,7 @@ describe('NotesView conflict（Test H：本地保存冲突 → draft 保留，�
     }
     // 加载 sync-adapter（与生产一致的 IIFE）
     const rel = '../../public/sync-adapter.js'
-    const src = require('node:fs').readFileSync(new URL(rel, import.meta.url), 'utf-8')
+    const src = readFileSync(new URL(rel, import.meta.url), 'utf-8')
     new Function(src)()
     // hydration：建立 baseState（v2）
     await (window.localStorage.getItem as any)('grad-planner-storage')

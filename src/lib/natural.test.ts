@@ -144,3 +144,46 @@ describe('「刻」时间解析', () => {
     expect(parseQuickAdd('下午3点三刻').time).toBe('15:45')
   })
 })
+
+describe('parseQuickAdd area 领域分类（Phase 2B）', () => {
+  it('「生活 买洗衣液」→ area=life，标题不含前缀', () => {
+    const r = parseQuickAdd('生活 买洗衣液')
+    expect(r.area).toBe('life')
+    expect(r.title).toBe('买洗衣液')
+  })
+
+  it('「科研 读LSTM论文」→ area=research', () => {
+    const r = parseQuickAdd('科研 读LSTM论文')
+    expect(r.area).toBe('research')
+    expect(r.title).toBe('读LSTM论文')
+  })
+
+  it('「学习 复习高数」→ area=study', () => {
+    const r = parseQuickAdd('学习 复习高数')
+    expect(r.area).toBe('study')
+  })
+
+  it('「杂务 交水电费」→ area=other', () => {
+    const r = parseQuickAdd('杂务 交水电费')
+    expect(r.area).toBe('other')
+  })
+
+  it('「研究一下LSTM」不作为 area（词后非空白，避免误伤标题）', () => {
+    const r = parseQuickAdd('研究一下LSTM的注意力机制')
+    expect(r.area).toBeUndefined()
+    expect(r.title).toContain('研究一下')
+  })
+
+  it('area 前缀与日期/优先级并存', () => {
+    const r = parseQuickAdd('生活 明天下午3点紧急取快递')
+    expect(r.area).toBe('life')
+    expect(r.priority).toBe('high')
+    expect(r.date).toBe(format(addDays(new Date(), 1), 'yyyy-MM-dd'))
+    expect(r.time).toBe('15:00')
+    expect(r.title).toBe('取快递')
+  })
+
+  it('无 area 前缀时 area 为空', () => {
+    expect(parseQuickAdd('买洗衣液').area).toBeUndefined()
+  })
+})

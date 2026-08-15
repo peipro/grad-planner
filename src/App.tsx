@@ -1,10 +1,11 @@
 import { useEffect, useState } from 'react'
-import { Calendar, CheckSquare, GitBranch, FileText, Timer, BarChart2, Settings, Newspaper, Languages, Cake, Flame, Search, BookOpen } from 'lucide-react'
+import { Calendar, CheckSquare, GitBranch, FileText, Timer, BarChart2, Settings, Newspaper, Languages, Cake, Flame, Search, BookOpen, Sun } from 'lucide-react'
 import { useStore } from './store'
 import { isHttpUrl } from './lib/external'
 import { refreshFromAuthority, REFRESH_ON_ERROR, applyAuthoritativeState } from './lib/mutations'
 import { useToast } from './lib/toast'
 import CalendarView from './views/CalendarView'
+import TodayView from './views/TodayView'
 import TodoView from './views/TodoView'
 import MilestoneView from './views/MilestoneView'
 import NotesView from './views/NotesView'
@@ -23,6 +24,7 @@ import { usePomodoroTicker } from './lib/pomodoro'
 import { useReminderTicker } from './lib/reminder'
 
 const nav = [
+  { id: 'today', label: '今日', icon: Sun },
   { id: 'calendar', label: '日历', icon: Calendar },
   { id: 'birthday', label: '生日', icon: Cake },
   { id: 'habit', label: '习惯', icon: Flame },
@@ -38,6 +40,7 @@ const nav = [
 ]
 
 const viewMap: Record<string, React.ComponentType> = {
+  today: TodayView,
   calendar: CalendarView,
   birthday: BirthdayView,
   habit: HabitView,
@@ -228,7 +231,7 @@ export default function App() {
             快速翻译
             <span style={{ fontSize: 10, opacity: 0.8, marginLeft: 'auto' }}>Ctrl+Shift+T</span>
           </button>
-          {nav.slice(0, 7).map((item) => {
+          {nav.slice(0, 8).map((item) => {
             const Icon = item.icon
             return (
               <button
@@ -242,7 +245,7 @@ export default function App() {
             )
           })}
           <div className="nav-group-title">系统</div>
-          {nav.slice(7).map((item) => {
+          {nav.slice(8).map((item) => {
             const Icon = item.icon
             return (
               <button

@@ -1,4 +1,4 @@
-import { useMemo, useState } from 'react'
+import { useMemo, useState, useRef, type MouseEvent as ReactMouseEvent } from 'react'
 import {
   addMonths, startOfMonth, endOfMonth, startOfWeek, endOfWeek,
   addDays, addWeeks, format, isSameMonth, isSameDay, isToday,
@@ -29,8 +29,11 @@ export default function CalendarView() {
   const [view, setView] = useState<CalView>('month')
   const [anchor, setAnchor] = useState(new Date())
   const [selectedDate, setSelectedDate] = useState(new Date())
+  // 悬浮卡片：锚定日期格（不跟随鼠标），带显示延迟与隐藏宽限，避免 chase/闪烁
   const [hoverDay, setHoverDay] = useState<Date | null>(null)
-  const [mousePos, setMousePos] = useState({ x: 0, y: 0 })
+  const [cardPos, setCardPos] = useState({ left: 0, top: 0 })
+  const hoverTimer = useRef<number | null>(null)
+  const hideTimer = useRef<number | null>(null)
   const [modalOpen, setModalOpen] = useState(false)
   const [editEvent, setEditEvent] = useState<CalEvent | null>(null)
   const [form, setForm] = useState({ title: '', type: 'personal' as EventType, start: '', end: '', note: '' })
@@ -194,6 +197,51 @@ export default function CalendarView() {
 
   const hoverEvs = hoverDay ? monthVisibleItems(hoverDay) : []
 
+  // ===== 悬浮卡片（Phase 2B UX 修复）=====
+  //  - 卡片位置由日期格的 getBoundingClientRect 计算，固定不跟随鼠标
+  //  - 显示延迟 150ms：快速扫过多个格子时不弹卡
+  //  - 隐藏宽限 180ms：鼠标从格子移向卡片期间不清除（进入卡片取消隐藏）
+  const CARD_W = 280
+  const CARD_H = 360
+
+  const clearHoverTimers = () => {
+    if (hoverTimer.current) { clearTimeout(hoverTimer.current); hoverTimer.current = null }
+    if (hideTimer.current) { clearTimeout(hideTimer.current); hideTimer.current = null }
+  }
+
+  const onCellEnter = (day: Date, e: ReactMouseEvent) => {
+    if (monthVisibleItems(day).length <= 3) return
+    if (hideTimer.current) { clearTimeout(hideTimer.current); hideTimer.current = null }
+    if (hoverTimer.current) clearTimeout(hoverTimer.current)
+    // 同步取 rect（React 合成事件在 handler 结束后 currentTarget 会被置 null）
+    const rect = e.currentTarget.getBoundingClientRect()
+    let left = rect.right + 10
+    if (left + CARD_W > window.innerWidth - 8) left = rect.left - CARD_W - 10
+    let top = rect.top
+    if (top + CARD_H > window.innerHeight - 8) top = Math.max(8, window.innerHeight - CARD_H - 8)
+    hoverTimer.current = window.setTimeout(() => {
+      setCardPos({ left: Math.max(8, left), top })
+      setHoverDay(day)
+    }, 150)
+  }
+
+  const onCellLeave = (day: Date) => {
+    if (hoverTimer.current) { clearTimeout(hoverTimer.current); hoverTimer.current = null }
+    if (hideTimer.current) clearTimeout(hideTimer.current)
+    hideTimer.current = window.setTimeout(() => {
+      setHoverDay((d) => (d && d.getTime() === day.getTime() ? null : d))
+    }, 180)
+  }
+
+  const onCardEnter = () => {
+    if (hideTimer.current) { clearTimeout(hideTimer.current); hideTimer.current = null }
+  }
+
+  const onCardLeave = () => {
+    clearHoverTimers()
+    setHoverDay(null)
+  }
+
   // ===== 时间轴视图（周/日通用） =====
   const renderTimeline = (days: Date[]) => {
     return (
@@ -282,9 +330,8 @@ export default function CalendarView() {
                   className={`cal-cell ${isCur ? '' : 'muted'} ${isSel ? 'selected' : ''} ${isToday(day) ? 'today' : ''}`}
                   onClick={() => setSelectedDate(day)}
                   onDoubleClick={() => openAdd(day)}
-                  onMouseEnter={(e) => { if (evs.length > 3) { setHoverDay(day); setMousePos({ x: e.clientX, y: e.clientY }) } }}
-                  onMouseMove={(e) => evs.length > 3 && setMousePos({ x: e.clientX, y: e.clientY })}
-                  onMouseLeave={() => setHoverDay((d) => (d && d.getTime() === day.getTime() ? null : d))}
+                  onMouseEnter={(e) => onCellEnter(day, e)}
+                  onMouseLeave={() => onCellLeave(day)}
                 >
                   <div className="cal-cell-num">{format(day, 'd')}</div>
                   <div className="cal-cell-events">
@@ -301,8 +348,8 @@ export default function CalendarView() {
       )}
 
       {hoverDay && hoverEvs.length > 3 && (
-        <div className="cal-hover-card card" onMouseLeave={() => setHoverDay(null)}
-          style={{ left: Math.min(mousePos.x + 14, window.innerWidth - 300), top: Math.min(mousePos.y + 10, window.innerHeight - 380) }}>
+        <div className="cal-hover-card card" onMouseEnter={onCardEnter} onMouseLeave={onCardLeave}
+          style={{ left: cardPos.left, top: cardPos.top }}>
           <div className="cal-hover-title">{format(hoverDay, 'M月d日 EEEE', { locale: zhCN })} · 共 {hoverEvs.length} 项</div>
           <div className="cal-hover-list">
             {hoverEvs.map((e) => (

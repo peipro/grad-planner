@@ -98,10 +98,19 @@ export function overdueTasks(tasks: Task[], dateKey: string): Task[] {
     .sort((a, b) => (a.due ?? '').localeCompare(b.due ?? ''))
 }
 
-/** 今天已完成的专注分钟数 */
+/**
+ * 今天已完成的专注分钟数。
+ * completedAt 为 UTC ISO（toISOString），必须换算成本地日期再比对 dateKey——
+ * 历史 bug：直接 startsWith(dateKey) 会把本地凌晨 00:00-08:00（UTC+8）的番茄记到前一天。
+ */
 export function todayFocusMinutes(pomodoros: { completedAt?: string; minutes: number }[], dateKey: string): number {
   return pomodoros
-    .filter((p) => p.completedAt && p.completedAt.startsWith(dateKey))
+    .filter((p) => {
+      if (!p.completedAt) return false
+      const d = new Date(p.completedAt)
+      if (isNaN(d.getTime())) return false
+      return localDateKey(d) === dateKey
+    })
     .reduce((sum, p) => sum + p.minutes, 0)
 }
 

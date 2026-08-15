@@ -28,8 +28,8 @@ beforeEach(() => {
       { id: 'h2', name: '运动', emoji: '🏃', weeklyTarget: 3, records: ['2026-08-15'], createdAt: '' },
     ],
     pomodoros: [
-      { id: 'p1', taskTitle: '专注', minutes: 25, completedAt: '2026-08-15T10:00:00.000Z' },
-      { id: 'p2', taskTitle: '昨天的', minutes: 50, completedAt: '2026-08-14T10:00:00.000Z' },
+      { id: 'p1', taskTitle: '专注', minutes: 25, completedAt: new Date(2026, 7, 15, 18, 0).toISOString() }, // 本地 8-15（时区无关）
+      { id: 'p2', taskTitle: '昨天的', minutes: 50, completedAt: new Date(2026, 7, 14, 18, 0).toISOString() }, // 本地 8-14
     ],
     projects: [],
     pomo: { mode: 'countdown', focusMin: 25, breakMin: 5, remaining: 1500, running: false, phase: 'focus', taskTitle: '', taskId: undefined, swSec: 0, swRunning: false },
@@ -193,7 +193,7 @@ describe('Pomodoro ↔ Task（Phase 3 #4）', () => {
   it('任务行显示今日该任务专注分钟', () => {
     useStore.setState({
       pomodoros: [
-        { id: 'pf1', taskTitle: '买洗衣液', minutes: 25, completedAt: '2026-08-15T04:00:00.000Z', taskId: 't1' },
+        { id: 'pf1', taskTitle: '买洗衣液', minutes: 25, completedAt: new Date(2026, 7, 15, 12, 0).toISOString(), taskId: 't1' },
       ],
     } as any)
     render(<TodayView />)

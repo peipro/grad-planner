@@ -10,6 +10,10 @@ const event = (id: string, start: string, over: Partial<CalEvent> = {}): CalEven
   id, title: 'E' + id, start, end: start, type: 'meeting', ...over,
 })
 
+// 本地时刻 → UTC ISO（测试机器时区无关：断言在任何时区都成立）
+const localIso = (y: number, m: number, d: number, h: number, min: number) =>
+  new Date(y, m - 1, d, h, min).toISOString()
+
 describe('localDateKey', () => {
   it('生成本地时区的 yyyy-MM-dd', () => {
     expect(localDateKey(new Date(2026, 7, 15))).toBe('2026-08-15')
@@ -84,21 +88,40 @@ describe('overdueTasks', () => {
 })
 
 describe('todayFocusMinutes', () => {
-  it('只统计今天完成的番茄钟分钟数', () => {
+  it('只统计当天（本地日期）完成的番茄钟分钟数', () => {
     const pomodoros = [
-      { id: 'p1', taskTitle: 'x', minutes: 25, completedAt: '2026-08-15T10:00:00.000Z' },
-      { id: 'p2', taskTitle: 'x', minutes: 50, completedAt: '2026-08-14T10:00:00.000Z' },
+      { id: 'p1', taskTitle: 'x', minutes: 25, completedAt: localIso(2026, 8, 15, 18, 0) }, // 本地 8-15
+      { id: 'p2', taskTitle: 'x', minutes: 50, completedAt: localIso(2026, 8, 14, 18, 0) }, // 本地 8-14
     ]
     expect(todayFocusMinutes(pomodoros as any, '2026-08-15')).toBe(25)
+    expect(todayFocusMinutes(pomodoros as any, '2026-08-14')).toBe(50)
+  })
+
+  // Phase 3 #5：跨午夜归属——completedAt 是 UTC ISO，必须按本地日期归属
+  // （历史 bug：UTC 字符串 startsWith 本地键，UTC+8 的 00:00-08:00 会记到前一天）
+  it.each(['00:30', '02:00', '07:30', '08:00', '23:30'])('本地 %s 完成的番茄记到当天（非前一天）', (hm) => {
+    const [h, m] = hm.split(':').map(Number)
+    const completedAt = localIso(2026, 8, 15, h, m)
+    expect(todayFocusMinutes([{ id: 'x', taskTitle: 't', minutes: 25, completedAt }] as any, '2026-08-15')).toBe(25)
+    expect(todayFocusMinutes([{ id: 'x', taskTitle: 't', minutes: 25, completedAt }] as any, '2026-08-14')).toBe(0)
+  })
+
+  it('跨午夜边界：本地 8-15 00:30 与 8-14 23:30 分属各自日期', () => {
+    const pomodoros = [
+      { id: 'a', taskTitle: 'x', minutes: 25, completedAt: localIso(2026, 8, 15, 0, 30) },
+      { id: 'b', taskTitle: 'x', minutes: 25, completedAt: localIso(2026, 8, 14, 23, 30) },
+    ]
+    expect(todayFocusMinutes(pomodoros as any, '2026-08-15')).toBe(25)
+    expect(todayFocusMinutes(pomodoros as any, '2026-08-14')).toBe(25)
   })
 })
 
 describe('focusMinutesForTask（Phase 3 #4：Pomodoro ↔ Task 聚合）', () => {
   const pomos = [
-    { id: 'p1', taskTitle: '读LSTM', minutes: 25, completedAt: '2026-08-15T04:00:00.000Z', taskId: 't1' },
-    { id: 'p2', taskTitle: '读LSTM', minutes: 50, completedAt: '2026-08-15T06:00:00.000Z', taskId: 't1' },
-    { id: 'p3', taskTitle: '买洗衣液', minutes: 25, completedAt: '2026-08-14T10:00:00.000Z' },
-    { id: 'p4', taskTitle: '读LSTM', minutes: 25, completedAt: '2026-08-14T10:00:00.000Z' }, // 旧记录：无 taskId 仅标题
+    { id: 'p1', taskTitle: '读LSTM', minutes: 25, completedAt: localIso(2026, 8, 15, 12, 0), taskId: 't1' },
+    { id: 'p2', taskTitle: '读LSTM', minutes: 50, completedAt: localIso(2026, 8, 15, 14, 0), taskId: 't1' },
+    { id: 'p3', taskTitle: '买洗衣液', minutes: 25, completedAt: localIso(2026, 8, 14, 18, 0) },
+    { id: 'p4', taskTitle: '读LSTM', minutes: 25, completedAt: localIso(2026, 8, 14, 18, 0) }, // 旧记录：无 taskId 仅标题
   ]
 
   it('按 taskId 聚合：同 id 新记录 + 无 id 旧记录（标题一致）', () => {

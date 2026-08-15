@@ -12,7 +12,9 @@ const dns = require('dns')
 const net = require('net')
 
 const ALLOWED_PROTOCOLS = new Set(['http:', 'https:'])
-const MAX_URL_LENGTH = 2048
+// 上限放宽到 64KB：翻译接口会把整段文本编码进 URL（中文 3 字节/字 → 约 9 个 URL 字符），
+// 原 2048 会误拦长文本翻译；64KB 仍能挡住异常超长 URL 的 DoS。
+const MAX_URL_LENGTH = 65536
 
 function stripBrackets(hostname) {
   return hostname.startsWith('[') && hostname.endsWith(']') ? hostname.slice(1, -1) : hostname

@@ -42,7 +42,7 @@ test('SSRF: 畸形 URL / 空 / 超长 REJECT', async () => {
   assert.strictEqual((await validateExternalUrl('')).ok, false)
   assert.strictEqual((await validateExternalUrl('not a url')).ok, false)
   assert.strictEqual((await validateExternalUrl('http://')).ok, false)
-  assert.strictEqual((await validateExternalUrl('http://' + 'a'.repeat(3000) + '.com/')).ok, false)
+  assert.strictEqual((await validateExternalUrl('http://' + 'a'.repeat(70000) + '.com/')).ok, false)
 })
 
 test('SSRF: 公网地址 ALLOW（IP 字面量，无 DNS 依赖）', async () => {

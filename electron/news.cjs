@@ -8,11 +8,34 @@ const { validateExternalUrl } = require('./url-security.cjs')
 const MAX_RESPONSE_BODY = 2 * 1024 * 1024 // 2MB
 
 // 代理配置（X API 与国外源需要代理访问）
-// 自动探测常见 Clash 代理端口（端口可能随配置变化，如 7897 / 7890 等）
+// 自动探测常见 Clash / FlClash / Clash Verge 代理端口（端口可能随配置变化）
 const PROXY_DEFAULT = process.env.HTTPS_PROXY || '127.0.0.1:7897'
-const PROXY_CANDIDATES = ['127.0.0.1:7897', '127.0.0.1:7890', '127.0.0.1:7891', '127.0.0.1:7899', '127.0.0.1:1080', '127.0.0.1:2080', '127.0.0.1:10808', '127.0.0.1:8888']
+const PROXY_CANDIDATES = ['127.0.0.1:7897', '127.0.0.1:7892', '127.0.0.1:7893', '127.0.0.1:7890', '127.0.0.1:7891', '127.0.0.1:7899', '127.0.0.1:1080', '127.0.0.1:10808', '127.0.0.1:10809', '127.0.0.1:2080', '127.0.0.1:8888', '127.0.0.1:9090']
 let proxyAddr = PROXY_DEFAULT
 let proxyProbePromise = null
+
+// 读取 Windows「系统代理」端口（Clash Verge / FlClash 开启系统代理后会写入注册表），
+// 覆盖用户自定义了端口、不在候选列表里的情况。
+function readSystemProxyAddr() {
+  if (process.platform !== 'win32') return null
+  try {
+    const { execSync } = require('child_process')
+    const out = execSync(
+      'reg query "HKCU\\Software\\Microsoft\\Windows\\CurrentVersion\\Internet Settings" /v ProxyServer',
+      { encoding: 'utf8', timeout: 2000, stdio: ['ignore', 'pipe', 'ignore'] },
+    )
+    // 形如 "127.0.0.1:7892" 或 "http=127.0.0.1:7892;https=127.0.0.1:7892;socks=127.0.0.1:7892"
+    const m = out.match(/(?:REG_SZ\s+)(.+)/)
+    if (m) {
+      const server = m[1].trim()
+      const hp = server.match(/(?:https?|socks)=([\d.]+|localhost):(\d+)/i)
+      if (hp) return `${hp[1]}:${hp[2]}`
+      const direct = server.match(/([\d.]+|localhost):(\d+)/)
+      if (direct) return `${direct[1]}:${direct[2]}`
+    }
+  } catch {}
+  return null
+}
 
 function testProxy(addr) {
   return new Promise((resolve) => {
@@ -28,16 +51,19 @@ function testProxy(addr) {
   })
 }
 
-// 首次使用时探测可用代理端口（结果缓存）
+// 首次使用时探测可用代理端口（结果缓存）；系统代理端口优先。
 function probeProxy() {
   if (!proxyProbePromise) {
     proxyProbePromise = (async () => {
-      for (const c of PROXY_CANDIDATES) {
-        if (c === PROXY_DEFAULT && (await testProxy(c))) { proxyAddr = c; return }
+      const candidates = []
+      const sys = readSystemProxyAddr()
+      if (sys) candidates.push(sys)
+      if (PROXY_DEFAULT && !candidates.includes(PROXY_DEFAULT)) candidates.push(PROXY_DEFAULT)
+      for (const c of PROXY_CANDIDATES) if (!candidates.includes(c)) candidates.push(c)
+      for (const c of candidates) {
+        if (await testProxy(c)) { proxyAddr = c; console.log('[proxy] 使用代理 ' + c); return }
       }
-      for (const c of PROXY_CANDIDATES) {
-        if (await testProxy(c)) { proxyAddr = c; return }
-      }
+      console.warn('[proxy] 未找到可用代理端口')
     })()
   }
   return proxyProbePromise
@@ -552,34 +578,37 @@ async function fetchArticle(url) {
   }
 }
 
-// ============ 翻译（国内有道优先，Google 经代理兜底） ============
+// ============ 翻译（Google 经代理优先，国内有道免代理兜底） ============
 
-// 有道网页翻译接口：无 key、国内可直连（无需 Clash 代理）。type=AUTO 自动识别源语言。
+// 有道网页翻译接口：无 key、国内可直连（无需代理）。type=AUTO 自动识别源语言。
 async function translateViaYoudao(text, target = 'zh-CN') {
   const url = `https://fanyi.youdao.com/translate?doctype=json&type=AUTO&tl=${target}&i=${encodeURIComponent(text)}`
   // fetchUrl 直连优先，失败自动回退代理（国内直连即可命中）
-  const html = await fetchUrl(url, 10000)
+  const html = await fetchUrl(url, 5000)
   const j = JSON.parse(html)
   const tgt = j && j.translateResult && Array.isArray(j.translateResult[0]) && j.translateResult[0][0] && j.translateResult[0][0].tgt
   if (j && j.errorCode === 0 && tgt) return tgt
   throw new Error('有道 errorCode=' + (j && j.errorCode))
 }
 
-// 单段翻译：有道（国内源）→ Google（代理）逐级降级
+// 单段翻译：Google（经代理，代理端口已自动探测）→ 有道（国内免代理）逐级降级
 async function translateChunk(chunk, target) {
   try {
-    const t = await translateViaYoudao(chunk, target)
-    if (t) return t
+    const res = await proxiedRequest(
+      `https://translate.googleapis.com/translate_a/single?client=gtx&sl=auto&tl=${target}&dt=t&q=${encodeURIComponent(chunk)}`,
+      15000,
+    )
+    const j = JSON.parse(res)
+    const segs = (j[0] ?? []).filter((s) => s && s[0]).map((s) => s[0])
+    const out = segs.join('')
+    if (out) return out
+    throw new Error('Google 返回空')
   } catch (e) {
-    console.error('[translate] 有道失败，回退 Google:', e && e.message)
+    console.error('[translate] Google 失败，回退有道:', e && e.message)
   }
-  const res = await proxiedRequest(
-    `https://translate.googleapis.com/translate_a/single?client=gtx&sl=auto&tl=${target}&dt=t&q=${encodeURIComponent(chunk)}`,
-    15000,
-  )
-  const j = JSON.parse(res)
-  const segs = (j[0] ?? []).filter((s) => s && s[0]).map((s) => s[0])
-  return segs.join('')
+  const t = await translateViaYoudao(chunk, target)
+  if (t) return t
+  throw new Error('有道返回空')
 }
 
 async function translateText(text, target = 'zh-CN') {

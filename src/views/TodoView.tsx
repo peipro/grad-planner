@@ -44,7 +44,7 @@ export default function TodoView() {
   const [editingTask, setEditingTask] = useState<Task | null>(null)
   const [projectModal, setProjectModal] = useState(false)
   const [activeProject, setActiveProject] = useState<string | null>(null)
-  const [form, setForm] = useState({ title: '', priority: 'medium' as Priority, due: '', status: 'todo' as TaskStatus, projectId: '', subtask: '', area: '' as '' | TaskArea })
+  const [form, setForm] = useState({ title: '', priority: 'medium' as Priority, due: '', time: '', status: 'todo' as TaskStatus, projectId: '', subtask: '', area: '' as '' | TaskArea })
   const [expanded, setExpanded] = useState<Set<string>>(new Set())
   const [newProject, setNewProject] = useState({ name: '', color: PROJECT_COLORS[0] })
   const [subTarget, setSubTarget] = useState<Task | null>(null)
@@ -123,26 +123,30 @@ export default function TodoView() {
     setQuickInput('')
   }
 
+  // 截止时间（HH:mm）拼接：有时间 → dateTtime:00（统一秒数格式）；无时间 → 纯日期（全天）
+  const buildDue = (date: string, time: string) => (date ? (time ? `${date}T${time}:00` : date) : undefined)
+
   const save = () => {
     if (!form.title.trim()) return
     const subtasks = form.subtask.trim() ? form.subtask.split('\n').map((t) => t.trim()).filter(Boolean).map((t) => ({ id: uid(), title: t, done: false })) : undefined
+    const due = buildDue(form.due, form.time)
     if (editingTask) {
       updateTask({
         ...editingTask,
         title: form.title,
         priority: form.priority,
-        due: form.due || undefined,
+        due,
         status: form.status,
         projectId: form.projectId || undefined,
         area: form.area || undefined,
         subtasks: subtasks ?? editingTask.subtasks ?? [],
       })
     } else {
-      addTask({ id: uid(), title: form.title, priority: form.priority, due: form.due || undefined, status: form.status, projectId: form.projectId || undefined, area: form.area || undefined, subtasks, createdAt: new Date().toISOString() })
+      addTask({ id: uid(), title: form.title, priority: form.priority, due, status: form.status, projectId: form.projectId || undefined, area: form.area || undefined, subtasks, createdAt: new Date().toISOString() })
     }
     setModalOpen(false)
     setEditingTask(null)
-    setForm({ title: '', priority: 'medium', due: '', status: 'todo', projectId: '', subtask: '', area: '' })
+    setForm({ title: '', priority: 'medium', due: '', time: '', status: 'todo', projectId: '', subtask: '', area: '' })
   }
 
   const openEdit = (t: Task) => {
@@ -151,6 +155,8 @@ export default function TodoView() {
       title: t.title,
       priority: t.priority,
       due: t.due ? t.due.slice(0, 10) : '',
+      // 编辑保留时间（历史 bug：只回填日期导致保存时时间被静默抹掉）
+      time: t.due && t.due.length > 10 ? t.due.slice(11, 16) : '',
       status: t.status,
       projectId: t.projectId ?? '',
       subtask: (t.subtasks ?? []).map((s) => s.title).join('\n'),
@@ -260,7 +266,7 @@ export default function TodoView() {
                 <span className={`status-badge s-${t.status}`}>
                   {{ todo: '待办', doing: '进行中', done: '已完成' }[t.status]}
                 </span>
-                {t.due && <span className="todo-due">{format(new Date(t.due), 'M月d日')}</span>}
+                {t.due && <span className="todo-due">{format(new Date(t.due), 'M月d日')}{t.due.length > 10 && t.due.slice(11, 16) !== '00:00' ? ` ${t.due.slice(11, 16)}` : ''}</span>}
               </>
             )}
             {hasSubs && <span className="todo-due">{doneSubs}/{subs.length} 子任务</span>}
@@ -507,6 +513,14 @@ export default function TodoView() {
               <div className="field">
                 <label>截止日期（可选）</label>
                 <DatePicker value={form.due} placeholder="不设置" onChange={(v) => setForm({ ...form, due: v ?? '' })} />
+              </div>
+              <div className="field">
+                <label>截止时间（可选）</label>
+                <input
+                  type="time"
+                  value={form.time}
+                  onChange={(e) => setForm({ ...form, time: e.target.value })}
+                />
               </div>
             </div>
             <div className="field">

@@ -1,5 +1,6 @@
 import { addDays, addWeeks, addMonths, addYears, addHours, format } from 'date-fns'
 import { TaskArea } from '../types'
+import { localDateKey } from './today'
 
 export interface ParsedQuickAdd {
   title: string
@@ -259,4 +260,23 @@ export function addHoursToDatetime(datetime: string, hours = 1): string {
 /** 判断字符串里是否含有可解析的日期线索 */
 export function hasDateHint(text: string): boolean {
   return /(天|周|星期|月|号|日|点|时|:\d)/.test(text)
+}
+
+/**
+ * 把解析结果组合成 Task 的 due（datetime-local 字符串）。
+ * 固定语义（QuickCapture / TodoView / Today 快速添加共用，禁止各自造 due 逻辑）：
+ *   - date + time → dateTtime（时间不丢失）
+ *   - 仅 time     → 今天 + time（时间隐含今天）
+ *   - 仅 date     → dateT12:00:00（产品默认正午）
+ *   - 都无        → defaultToToday ? 今天 12:00 : undefined
+ */
+export function taskDueOf(parsed: ParsedQuickAdd, defaultToToday = false): string | undefined {
+  const today = localDateKey()
+  // 统一输出格式（含秒）：HH:mm → HH:mm:00，保证所有入口 due 一致可预测
+  if (parsed.time) {
+    const t = `${parsed.time}:00`
+    return parsed.date ? `${parsed.date}T${t}` : `${today}T${t}`
+  }
+  if (parsed.date) return `${parsed.date}T12:00:00`
+  return defaultToToday ? `${today}T12:00:00` : undefined
 }

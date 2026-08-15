@@ -3,7 +3,7 @@ import { format } from 'date-fns'
 import { Plus, Trash2, CheckSquare, Square, Loader, ChevronRight, ChevronDown, PencilLine, StickyNote, BookOpen } from 'lucide-react'
 import { useStore, uid, Project } from '../store'
 import { useToast } from '../lib/toast'
-import { parseQuickAdd } from '../lib/natural'
+import { parseQuickAdd, taskDueOf } from '../lib/natural'
 import { classifyQuadrant, overdueDays } from '../lib/task'
 import { Priority, Task, TaskStatus, TaskArea } from '../types'
 import PromptModal from '../components/PromptModal'
@@ -110,7 +110,8 @@ export default function TodoView() {
       id: uid(), title: parsed.title || raw,
       priority: parsed.priority ?? 'medium',
       status: 'todo',
-      due: parsed.date ? `${parsed.date}T12:00:00` : undefined,
+      // 与 QuickCapture / Today 共用同一套 due 逻辑（时间不丢失）
+      due: taskDueOf(parsed),
       projectId: activeProject ?? undefined,
       area: parsed.area,
       subtasks: [],

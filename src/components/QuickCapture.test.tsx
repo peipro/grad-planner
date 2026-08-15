@@ -97,14 +97,14 @@ describe('日期解析落库', () => {
     const monday = addDays(now(), -((now().getDay() + 6) % 7))
     const nextWed = addDays(monday, 9) // 下周一 + 3 天偏移（周一为起点，周三=索引2）
     const t = useStore.getState().tasks[0]
-    expect(t.due).toBe(`${FMT(nextWed)}T15:00`)
+    expect(t.due).toBe(`${FMT(nextWed)}T15:00:00`)
     expect(t.title).toBe('给导师发实验结果')
   })
 
   it('任务：「明天下午3点交实验报告」→ 明天 15:00（数字时段优先于默认时段）', () => {
     submit(open('task'), '明天下午3点交实验报告')
     const t = useStore.getState().tasks[0]
-    expect(t.due).toBe(`${FMT(addDays(now(), 1))}T15:00`)
+    expect(t.due).toBe(`${FMT(addDays(now(), 1))}T15:00:00`)
   })
 })
 

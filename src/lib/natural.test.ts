@@ -1,6 +1,6 @@
 import { describe, it, expect, vi, afterEach } from 'vitest'
 import { addDays, addMonths, addYears, format } from 'date-fns'
-import { parseQuickAdd, combineDateTime, hasDateHint, addHoursToDatetime } from './natural'
+import { parseQuickAdd, combineDateTime, hasDateHint, addHoursToDatetime, taskDueOf } from './natural'
 
 // 「下周X」正确期望值（与实现语义一致：本周周一 + 7 + 周X偏移，周一为一周起点）
 const nextWeekday = (target: number, base: Date = new Date()) =>
@@ -316,5 +316,33 @@ describe('下周X 跨周边界（回归：周四周末不再跳到下下周）',
     vi.setSystemTime(new Date('2026-08-13T08:00:00')) // 周四
     const r = parseQuickAdd('下周五交表')
     expect(r.date).toBe('2026-08-21')
+  })
+})
+
+describe('taskDueOf（Phase 3 统一 due 构造：QuickCapture/TodoView/Today 共用，禁止各入口自造逻辑）', () => {
+  afterEach(() => vi.useRealTimers())
+  const setNow = () => { vi.useFakeTimers(); vi.setSystemTime(new Date('2026-08-15T08:00:00')) }
+
+  it('date + time → dateTtime（时间不丢失）', () => {
+    expect(taskDueOf({ title: 'x', date: '2026-08-19', time: '15:00' })).toBe('2026-08-19T15:00:00')
+  })
+
+  it('仅 time → 今天 + time（时间隐含今天）', () => {
+    setNow()
+    expect(taskDueOf({ title: 'x', time: '15:00' })).toBe('2026-08-15T15:00:00')
+  })
+
+  it('仅 date → dateT12:00:00（产品默认正午）', () => {
+    expect(taskDueOf({ title: 'x', date: '2026-08-19' })).toBe('2026-08-19T12:00:00')
+  })
+
+  it('都无 → undefined（不设日期）', () => {
+    expect(taskDueOf({ title: 'x' })).toBeUndefined()
+  })
+
+  it('都无 + defaultToToday → 今天 12:00（Today 入口默认，其余入口不默认）', () => {
+    setNow()
+    expect(taskDueOf({ title: 'x' }, true)).toBe('2026-08-15T12:00:00')
+    expect(taskDueOf({ title: 'x' })).toBeUndefined()
   })
 })

@@ -36,11 +36,11 @@ export const AREA_COLORS: Record<string, string> = {
   other: '#9aa1b0',
 }
 
-/** 任务是否为今天到期的「全天」任务：due 只有日期，或时间为 00:00 */
+/** 任务是否为今天到期的「全天」任务：due 只有日期，或时间为 00:00（兼容 HH:mm 与 HH:mm:00） */
 export function isAllDayDue(t: Task, dateKey: string): boolean {
   if (!t.due || !t.due.startsWith(dateKey)) return false
   const rest = t.due.slice(10)
-  return !rest || rest === 'T00:00'
+  return !rest || rest === 'T00:00' || rest === 'T00:00:00'
 }
 
 /**

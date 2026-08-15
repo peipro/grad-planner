@@ -264,7 +264,11 @@ export default function App() {
         </div>
       </aside>
       <main className="main">
-        <View />
+        {activeView === 'today' ? (
+          <TodayView onQuickCapture={() => setQuickOpen(true)} />
+        ) : (
+          <View />
+        )}
       </main>
       {quickOpen && <QuickCapture onClose={() => setQuickOpen(false)} />}
       {searchOpen && <GlobalSearch onClose={() => setSearchOpen(false)} />}

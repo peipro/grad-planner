@@ -6,6 +6,7 @@ import {
 import { zhCN } from 'date-fns/locale'
 import { ChevronLeft, ChevronRight, Plus, X, Calendar as CalendarIcon } from 'lucide-react'
 import { useStore, uid } from '../store'
+import { addHoursToDatetime } from '../lib/natural'
 import { CalEvent, EventType, Task } from '../types'
 import { nextBirthdayDate, birthdayDesc } from '../lib/birthday'
 import { eventSpansDay } from '../lib/event'
@@ -77,14 +78,20 @@ export default function CalendarView() {
     note: '里程碑结束',
   })
 
-  const taskEvent = (t: Task, day: Date) => ({
-    id: 'task-' + t.id,
-    title: `📌 ${t.title}`,
-    type: 'deadline' as EventType,
-    start: DATE_ONLY(day) + 'T09:00',
-    end: DATE_ONLY(day) + 'T10:00',
-    note: t.priority === 'high' ? '高优先级任务到期' : '任务到期',
-  })
+  const taskEvent = (t: Task, day: Date) => {
+    // 使用任务实际到期时间显示（历史 bug：硬编码 09:00，导致「下午3点」的任务在日历里显示成上午9点）
+    // 无时间（纯日期 due）→ 默认 09:00 视为当天任务
+    const dueHm = t.due && t.due.length > 10 ? t.due.slice(11, 16) : '09:00'
+    const start = `${DATE_ONLY(day)}T${dueHm}`
+    return {
+      id: 'task-' + t.id,
+      title: `📌 ${t.title}`,
+      type: 'deadline' as EventType,
+      start,
+      end: addHoursToDatetime(start, 1),
+      note: t.priority === 'high' ? '高优先级任务到期' : '任务到期',
+    }
+  }
 
   // ===== 视图数据 =====
   const monthDays = useMemo(() => {

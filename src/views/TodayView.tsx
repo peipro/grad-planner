@@ -1,9 +1,9 @@
 import { useMemo, useState } from 'react'
 import { format } from 'date-fns'
 import { zhCN } from 'date-fns/locale'
-import { Sun, Square, CheckSquare, Calendar as CalendarIcon, Timer, Plus } from 'lucide-react'
+import { Sun, Square, CheckSquare, Calendar as CalendarIcon, Timer, Plus, Zap } from 'lucide-react'
 import { useStore, uid } from '../store'
-import { parseQuickAdd } from '../lib/natural'
+import { parseQuickAdd, taskDueOf } from '../lib/natural'
 import { formatMinutes } from '../lib/format'
 import {
   localDateKey, todayItems, overdueTasks, todayFocusMinutes,
@@ -24,7 +24,7 @@ const EVENT_LABELS: Record<EventType, string> = {
   personal: '生活',
 }
 
-export default function TodayView() {
+export default function TodayView({ onQuickCapture }: { onQuickCapture?: () => void }) {
   const tasks = useStore((s) => s.tasks)
   const events = useStore((s) => s.events)
   const habits = useStore((s) => s.habits)
@@ -71,8 +71,9 @@ export default function TodayView() {
       title: parsed.title || raw,
       priority: parsed.priority ?? 'medium',
       status: 'todo',
-      // 未写日期 → 默认今天 12:00，让「今天要做什么」直接落进时间线
-      due: parsed.date ? `${parsed.date}T12:00:00` : `${dateKey}T12:00:00`,
+      // 与 QuickCapture / TodoView 共用同一套 due 逻辑（时间不丢失）；
+      // 仅 Today 保留「未写日期 → 今天」的入口默认，让新任务直接落进今日时间线
+      due: taskDueOf(parsed, true),
       area: parsed.area,
       createdAt: new Date().toISOString(),
     })
@@ -241,6 +242,9 @@ export default function TodayView() {
         </button>
         <button className="bar-btn" onClick={() => { setQuickOpen((v) => !v); setQuickInput('') }}>
           <Plus size={15} /> 添加待办
+        </button>
+        <button className="bar-btn" onClick={() => onQuickCapture?.()} title="快速记录：任务 / 日程 / 笔记（无需快捷键）">
+          <Zap size={15} /> 快速记录
         </button>
         <button className="bar-btn" onClick={() => gotoView('calendar')}>
           <CalendarIcon size={15} /> 日历

@@ -2,16 +2,10 @@ import { useState, useEffect } from 'react'
 import { Zap, X } from 'lucide-react'
 import { useStore, uid } from '../store'
 import { useToast } from '../lib/toast'
-import { parseQuickAdd, combineDateTime, hasDateHint, addHoursToDatetime } from '../lib/natural'
+import { parseQuickAdd, combineDateTime, hasDateHint, addHoursToDatetime, taskDueOf } from '../lib/natural'
 import { EventType, TaskStatus } from '../types'
 
 type Mode = 'auto' | 'task' | 'event' | 'note'
-
-/** 本地时区今天的日期键（时间仅给出时使用） */
-function localTodayKey(): string {
-  const d = new Date()
-  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`
-}
 
 export default function QuickCapture({ onClose }: { onClose: () => void }) {
   const [input, setInput] = useState('')
@@ -50,10 +44,9 @@ export default function QuickCapture({ onClose }: { onClose: () => void }) {
       addEvent({ id: uid(), title: parsed.title, type: (parsed.type ?? 'personal') as EventType, start, end })
       useToast.getState().show('已保存为日程')
     } else {
-      // Task：时间不丢失 —— date+time 组合；仅时间 → 今天对应时段；仅日期 → 12:00（产品默认）
-      const due = parsed.time
-        ? (parsed.date ? `${parsed.date}T${parsed.time}` : `${localTodayKey()}T${parsed.time}`)
-        : (parsed.date ? `${parsed.date}T12:00:00` : undefined)
+      // Task：日期时间不丢失（date+time 组合；仅时间 → 今天该时段；仅日期 → 12:00 产品默认）
+      // 与 Today / TodoView 共用同一套 taskDueOf，禁止各自造 due 逻辑
+      const due = taskDueOf(parsed)
       addTask({
         id: uid(), title: parsed.title,
         priority: parsed.priority ?? 'medium',

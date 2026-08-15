@@ -94,3 +94,25 @@ describe('日历悬浮卡片（>3 项触发）', () => {
     expect(card()).toBeNull()
   })
 })
+
+describe('日历任务时间显示（Phase 3：按实际到期时间）', () => {
+  it('「下午3点」到期任务在日历时间线显示 15:00（历史 bug：硬编码 09:00）', () => {
+    useStore.setState({
+      tasks: [{ id: 'task15', title: '下午的文献', priority: 'medium', status: 'todo', due: '2026-08-15T15:00:00', createdAt: '' }],
+    } as any)
+    render(<CalendarView />)
+    fireEvent.click(screen.getByText('日')) // 日视图时间线
+    const el = screen.getByText('📌 下午的文献').closest('.tl-event') as HTMLElement
+    expect(within(el).getByText('15:00')).toBeTruthy()
+  })
+
+  it('无时间（纯日期 due）任务仍显示为 09:00 默认', () => {
+    useStore.setState({
+      tasks: [{ id: 'taskAllday', title: '全天事项', priority: 'medium', status: 'todo', due: '2026-08-15', createdAt: '' }],
+    } as any)
+    render(<CalendarView />)
+    fireEvent.click(screen.getByText('日'))
+    const el = screen.getByText('📌 全天事项').closest('.tl-event') as HTMLElement
+    expect(within(el).getByText('09:00')).toBeTruthy()
+  })
+})

@@ -139,6 +139,35 @@ describe('TodayView 底部轻操作', () => {
     expect(created?.due).toBe('2026-08-16T12:00:00')
   })
 
+  it('时间不丢失：快速添加「生活 下午3点取快递」→ 今天 15:00 + area=life（与 Quick Capture 同逻辑）', () => {
+    render(<TodayView />)
+    fireEvent.click(screen.getByText('添加待办'))
+    const input = document.querySelector('.bar-input') as HTMLInputElement
+    fireEvent.change(input, { target: { value: '生活 下午3点取快递' } })
+    fireEvent.keyDown(input, { key: 'Enter' })
+    const created = useStore.getState().tasks.find((x) => x.title === '取快递')
+    expect(created).toBeTruthy()
+    expect(created?.area).toBe('life')
+    expect(created?.due).toBe('2026-08-15T15:00:00') // 不再是 12:00
+  })
+
+  it('时间不丢失：快速添加「明天下午3点读 LSTM」→ 明天 15:00（不得落成 12:00）', () => {
+    render(<TodayView />)
+    fireEvent.click(screen.getByText('添加待办'))
+    const input = document.querySelector('.bar-input') as HTMLInputElement
+    fireEvent.change(input, { target: { value: '明天下午3点读 LSTM' } })
+    fireEvent.keyDown(input, { key: 'Enter' })
+    const created = useStore.getState().tasks.find((x) => x.title === '读 LSTM')
+    expect(created?.due).toBe('2026-08-16T15:00:00')
+  })
+
+  it('Today 提供「快速记录」入口：点击唤起 Quick Capture（无需记忆快捷键）', () => {
+    const spy = vi.fn()
+    render(<TodayView onQuickCapture={spy} />)
+    fireEvent.click(screen.getByText('快速记录'))
+    expect(spy).toHaveBeenCalledTimes(1)
+  })
+
   it('开始专注：未运行时点击启动番茄钟倒计时', () => {
     render(<TodayView />)
     fireEvent.click(screen.getByText('开始专注'))

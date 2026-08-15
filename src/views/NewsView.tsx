@@ -189,6 +189,15 @@ export default function NewsView() {
 
     let content: string
     if (body) {
+      // 英文正文 → 翻译成中文，保存中英对照（便于对照阅读）
+      let zhBody = ''
+      if (isEnglishText(body) && api?.translateText) {
+        toast('正在翻译正文并保存…')
+        try {
+          const r = await api.translateText(body)
+          if (r?.ok && r.content && r.content.trim()) zhBody = r.content.trim()
+        } catch {}
+      }
       content = [
         `# ${title}`,
         '',
@@ -197,9 +206,13 @@ export default function NewsView() {
         '',
         '---',
         '',
-        '## 正文',
+        '## 正文（原文）',
         '',
         body,
+        '',
+        ...(zhBody
+          ? ['---', '', '## 正文（中文翻译）', '', zhBody]
+          : (isEnglishText(body) ? ['> 译文：翻译失败，可稍后在翻译页重试'] : [])),
         '',
         '---',
         '',

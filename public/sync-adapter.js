@@ -211,13 +211,33 @@
     flushTimer = setTimeout(flush, FLUSH_MS)
   }
 
+  // 本地偏好（每端独立、不经 mutation 同步）字段：hydration 时优先取本机 localStorage，
+  // 避免权威磁盘里的旧值（如 v0.2.0 遗留的 theme）在重启/同步后被误当作新值覆盖用户设置。
+  var LOCAL_CONFIG_KEYS = ['theme', 'reminders', 'autoBackup', 'lastBackup', 'newsConfig']
+
+  function withLocalConfig(dataStr) {
+    if (typeof dataStr !== 'string' || !dataStr) return dataStr
+    var p = parsePersist(dataStr)
+    if (!p || !p.state) return dataStr
+    var local = nativeGet.call(window.localStorage, SYNC_KEY)
+    var lp = local ? parsePersist(local) : null
+    if (!lp || !lp.state) return dataStr
+    var changed = false
+    for (var i = 0; i < LOCAL_CONFIG_KEYS.length; i++) {
+      var k = LOCAL_CONFIG_KEYS[i]
+      if (lp.state[k] !== undefined) { p.state[k] = lp.state[k]; changed = true }
+    }
+    return changed ? JSON.stringify({ state: p.state, version: p.version }) : dataStr
+  }
+
   function remoteGet() {
     if (isElectron) {
       return window.electronAPI.syncStorageGet().then(function (res) {
         if (res && res.found) {
-          var p = parsePersist(res.data)
+          var merged = withLocalConfig(res.data)
+          var p = parsePersist(merged)
           if (p) { baseState = p.state; lastDiffState = p.state }
-          return res.data
+          return merged
         }
         var legacy = nativeGet.call(window.localStorage, SYNC_KEY)
         if (legacy != null) {
@@ -245,9 +265,10 @@
           }
           return legacy
         }
-        var p2 = parsePersist(text)
+        var merged = withLocalConfig(text)
+        var p2 = parsePersist(merged)
         if (p2) { baseState = p2.state; lastDiffState = p2.state }
-        return text
+        return merged
       })
       .catch(function () {
         return nativeGet.call(window.localStorage, SYNC_KEY)

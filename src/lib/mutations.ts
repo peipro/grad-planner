@@ -36,11 +36,13 @@ export const REFRESH_ON_ERROR: ReadonlySet<string> = new Set(['persistence_failu
 //   activeView  —— 页面导航，每端独立
 //   pomo        —— 番茄钟运行时状态（running/remaining/swSec/endAt 等），覆盖会打断计时
 //   newsConfig  —— 含 renderer 内存密钥（xKey/xSecret），从权威覆盖会清掉用户输入
+//   theme/reminders/autoBackup/lastBackup —— 本地偏好设置，每端独立，不经 mutation 同步，
+//     若被权威（磁盘旧值）覆盖会导致「主题/提醒改完又自己跳回去」的 bug
 
 /**
  * State Sync merge：authoritative 持久化字段覆盖 current，renderer-only 字段保留。
  * 与 mergePersistedState（hydration/导入用，pomo 强制复位）不同：
- * State Sync 绝不能打断用户正在进行的 UI 状态（番茄钟/页面/密钥）。
+ * State Sync 绝不能打断用户正在进行的 UI 状态（番茄钟/页面/密钥/主题/提醒）。
  */
 export function mergeAuthoritativeState(persisted: unknown, current: PlannerState): PlannerState {
   const p = (persisted || {}) as Partial<PlannerState>
@@ -52,6 +54,10 @@ export function mergeAuthoritativeState(persisted: unknown, current: PlannerStat
     activeView: current.activeView,
     pomo: current.pomo,
     newsConfig: current.newsConfig,
+    theme: current.theme,
+    reminders: current.reminders,
+    autoBackup: current.autoBackup,
+    lastBackup: current.lastBackup,
   }
 }
 

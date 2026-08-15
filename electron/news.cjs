@@ -552,10 +552,39 @@ async function fetchArticle(url) {
   }
 }
 
-// ============ 翻译（Google 免费接口，经代理） ============
+// ============ 翻译（国内有道优先，Google 经代理兜底） ============
+
+// 有道网页翻译接口：无 key、国内可直连（无需 Clash 代理）。type=AUTO 自动识别源语言。
+async function translateViaYoudao(text, target = 'zh-CN') {
+  const url = `https://fanyi.youdao.com/translate?doctype=json&type=AUTO&tl=${target}&i=${encodeURIComponent(text)}`
+  // fetchUrl 直连优先，失败自动回退代理（国内直连即可命中）
+  const html = await fetchUrl(url, 10000)
+  const j = JSON.parse(html)
+  const tgt = j && j.translateResult && Array.isArray(j.translateResult[0]) && j.translateResult[0][0] && j.translateResult[0][0].tgt
+  if (j && j.errorCode === 0 && tgt) return tgt
+  throw new Error('有道 errorCode=' + (j && j.errorCode))
+}
+
+// 单段翻译：有道（国内源）→ Google（代理）逐级降级
+async function translateChunk(chunk, target) {
+  try {
+    const t = await translateViaYoudao(chunk, target)
+    if (t) return t
+  } catch (e) {
+    console.error('[translate] 有道失败，回退 Google:', e && e.message)
+  }
+  const res = await proxiedRequest(
+    `https://translate.googleapis.com/translate_a/single?client=gtx&sl=auto&tl=${target}&dt=t&q=${encodeURIComponent(chunk)}`,
+    15000,
+  )
+  const j = JSON.parse(res)
+  const segs = (j[0] ?? []).filter((s) => s && s[0]).map((s) => s[0])
+  return segs.join('')
+}
+
 async function translateText(text, target = 'zh-CN') {
   if (!text || !text.trim()) return { ok: false, error: '内容为空' }
-  // 超长分段翻译（单次上限约 4500 字符）
+  // 超长分段翻译（单次上限约 4000 字符）
   // 按句子边界分段，避免从单词/句子中间截断导致译文粘连
   const chunks = []
   let rest = text.trim()
@@ -575,25 +604,19 @@ async function translateText(text, target = 'zh-CN') {
 
   const translated = []
   for (const chunk of chunks) {
-    let res
     try {
-      res = await Promise.race([
-        proxiedRequest(
-          `https://translate.googleapis.com/translate_a/single?client=gtx&sl=auto&tl=${target}&dt=t&q=${encodeURIComponent(chunk)}`,
-          15000,
-        ),
-        new Promise((_, rej) => setTimeout(() => rej(new Error('翻译超时')), 16000)),
+      const out = await Promise.race([
+        translateChunk(chunk, target),
+        new Promise((_, rej) => setTimeout(() => rej(new Error('翻译超时')), 20000)),
       ])
+      translated.push(out)
     } catch (e) {
       const msg = String(e && e.message ? e.message : e)
-      if (msg.includes('超时') || msg.includes('timeout') || msg.includes('socket')) {
-        return { ok: false, error: '翻译服务连接超时，请检查代理（Clash）节点是否可用' }
+      if (msg.includes('超时') || msg.includes('timeout') || msg.includes('socket') || msg.includes('URL 校验失败')) {
+        return { ok: false, error: '翻译服务不可用（国内源与代理均连接失败），请检查网络后重试' }
       }
       return { ok: false, error: `翻译失败：${msg}` }
     }
-    const j = JSON.parse(res)
-    const segs = (j[0] ?? []).filter((s) => s && s[0]).map((s) => s[0])
-    translated.push(segs.join(''))
   }
 
   if (translated.length === 0) return { ok: false, error: '翻译结果为空' }

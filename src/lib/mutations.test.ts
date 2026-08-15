@@ -420,10 +420,11 @@ describe('mergeAuthoritativeState（区分 authoritative 与 renderer-only）', 
     expect(merged.newsConfig.xKey).toBe('secret-in-memory') // 内存密钥不被清
   })
 
-  it('配置字段（theme/reminders）来自权威', () => {
-    useStore.setState({ theme: { mode: 'light', accent: 'blue' } } as any)
-    const merged = mergeAuthoritativeState({ theme: { mode: 'dark', accent: 'green' } }, useStore.getState())
-    expect(merged.theme).toEqual({ mode: 'dark', accent: 'green' })
+  it('配置字段（theme/reminders）为本地偏好，不随权威旧值覆盖', () => {
+    useStore.setState({ theme: { mode: 'light', accent: 'blue' }, reminders: { enabled: false, eventLeadMin: 15, birthdayLeadDays: 7, taskLeadDays: 1 } } as any)
+    const merged = mergeAuthoritativeState({ theme: { mode: 'dark', accent: 'green' }, reminders: { enabled: true, eventLeadMin: 60, birthdayLeadDays: 14, taskLeadDays: 7 } }, useStore.getState())
+    expect(merged.theme).toEqual({ mode: 'light', accent: 'blue' }) // 本地主题保留，不被权威旧值覆盖
+    expect(merged.reminders).toEqual({ enabled: false, eventLeadMin: 15, birthdayLeadDays: 7, taskLeadDays: 1 })
   })
 
   it('milestones 自愈（与 persist merge 同语义）', () => {

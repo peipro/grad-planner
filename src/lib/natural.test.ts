@@ -1,6 +1,10 @@
-import { describe, it, expect } from 'vitest'
-import { addDays, format } from 'date-fns'
+import { describe, it, expect, vi, afterEach } from 'vitest'
+import { addDays, addMonths, addYears, format } from 'date-fns'
 import { parseQuickAdd, combineDateTime, hasDateHint, addHoursToDatetime } from './natural'
+
+// 「下周X」正确期望值（与实现语义一致：本周周一 + 7 + 周X偏移，周一为一周起点）
+const nextWeekday = (target: number, base: Date = new Date()) =>
+  addDays(addDays(base, -((base.getDay() + 6) % 7)), 7 + ((target + 6) % 7))
 
 describe('parseQuickAdd 时间解析', () => {
   it('解析「下午3点半」为 15:30', () => {
@@ -185,5 +189,132 @@ describe('parseQuickAdd area 领域分类（Phase 2B）', () => {
 
   it('无 area 前缀时 area 为空', () => {
     expect(parseQuickAdd('买洗衣液').area).toBeUndefined()
+  })
+})
+
+describe('相对日期扩展（Phase 2C 固定语义，勿更改解释）', () => {
+  // 固定语义：半个月 = +15 天（不随月长变化，确定性取值）
+  it('「半个月后」→ +15 天', () => {
+    const r = parseQuickAdd('半个月后复习 LSTM')
+    expect(r.date).toBe(format(addDays(new Date(), 15), 'yyyy-MM-dd'))
+    expect(r.title).toBe('复习 LSTM')
+  })
+
+  it('「半月后」→ +15 天', () => {
+    const r = parseQuickAdd('半月后提交报告')
+    expect(r.date).toBe(format(addDays(new Date(), 15), 'yyyy-MM-dd'))
+  })
+
+  // 固定语义：N周半 = N×7 + 3 天（半周按 3 天整算，避免半天时区边界）
+  it('「两周半后」→ +17 天（2×7+3）', () => {
+    const r = parseQuickAdd('两周半后提交实验')
+    expect(r.date).toBe(format(addDays(new Date(), 17), 'yyyy-MM-dd'))
+    expect(r.title).toBe('提交实验')
+  })
+
+  it('「一周半后」→ +10 天（1×7+3）', () => {
+    const r = parseQuickAdd('一周半后交作业')
+    expect(r.date).toBe(format(addDays(new Date(), 10), 'yyyy-MM-dd'))
+  })
+
+  // 固定语义：下个月 = date-fns addMonths(+1)（日历月对齐）
+  it('「下个月」→ addMonths +1（日历月对齐）', () => {
+    const r = parseQuickAdd('下个月组会')
+    expect(r.date).toBe(format(addMonths(new Date(), 1), 'yyyy-MM-dd'))
+  })
+
+  // 固定语义：明年 = date-fns addYears(+1)
+  it('「明年」→ +1 年', () => {
+    const r = parseQuickAdd('明年毕业论文')
+    expect(r.date).toBe(format(addYears(new Date(), 1), 'yyyy-MM-dd'))
+  })
+
+  it('「下个礼拜三」与「下个星期三」完全等价', () => {
+    const r1 = parseQuickAdd('下个礼拜三开会')
+    const r2 = parseQuickAdd('下个星期三开会')
+    expect(r1.date).toBe(r2.date)
+    expect(r1.date).toBeTruthy()
+  })
+
+  it('「下礼拜二」也能识别（无「个」）', () => {
+    const r = parseQuickAdd('下礼拜二交表')
+    expect(r.date).toBeTruthy()
+    expect(r.title).toBe('交表')
+  })
+})
+
+describe('时段默认时间（无具体数字，Phase 2C 固定语义）', () => {
+  // 固定默认：早上 08:00 · 上午 09:00 · 中午 12:00 · 下午 15:00 · 傍晚 18:00 · 晚上 19:00
+  it('「后天上午去办事」→ 后天 + 09:00', () => {
+    const r = parseQuickAdd('后天上午去办事')
+    expect(r.date).toBe(format(addDays(new Date(), 2), 'yyyy-MM-dd'))
+    expect(r.time).toBe('09:00')
+    expect(r.title).toBe('去办事')
+  })
+
+  it('「明天上午」→ 明天 + 09:00（与「明上午」行为一致）', () => {
+    const r = parseQuickAdd('明天上午组会')
+    expect(r.date).toBe(format(addDays(new Date(), 1), 'yyyy-MM-dd'))
+    expect(r.time).toBe('09:00')
+  })
+
+  it('「下周三下午给导师发实验结果」→ 下周三 + 15:00', () => {
+    const r = parseQuickAdd('下周三下午给导师发实验结果')
+    expect(r.date).toBe(format(nextWeekday(3), 'yyyy-MM-dd'))
+    expect(r.time).toBe('15:00')
+    expect(r.title).toBe('给导师发实验结果')
+  })
+
+  it('「下个礼拜三下午开会」→ 礼拜三 + 15:00', () => {
+    const r = parseQuickAdd('下个礼拜三下午开会')
+    expect(r.date).toBe(format(nextWeekday(3), 'yyyy-MM-dd'))
+    expect(r.time).toBe('15:00')
+    expect(r.title).toBe('开会')
+  })
+
+  it('「今天晚上开会」→ 今天 + 19:00', () => {
+    const r = parseQuickAdd('今天晚上开会')
+    expect(r.date).toBe(format(new Date(), 'yyyy-MM-dd'))
+    expect(r.time).toBe('19:00')
+    expect(r.title).toBe('开会')
+  })
+
+  it('标题中间的时段词不误伤：「商量一下下午的安排」不设时间', () => {
+    const r = parseQuickAdd('商量一下下午的安排')
+    expect(r.time).toBeUndefined()
+    expect(r.title).toBe('商量一下下午的安排')
+  })
+})
+
+describe('下周X 跨周边界（回归：周四周末不再跳到下下周）', () => {
+  afterEach(() => vi.useRealTimers())
+
+  it('周六说「下周三」→ 下周周三（此前会跳到下下周三）', () => {
+    vi.useFakeTimers()
+    vi.setSystemTime(new Date('2026-08-15T08:00:00')) // 周六
+    const r = parseQuickAdd('下周三组会')
+    expect(r.date).toBe('2026-08-19')
+    expect(r.title).toBe('组会')
+  })
+
+  it('周日说「下周一」→ 次日周一', () => {
+    vi.useFakeTimers()
+    vi.setSystemTime(new Date('2026-08-16T08:00:00')) // 周日
+    const r = parseQuickAdd('下周一开会')
+    expect(r.date).toBe('2026-08-17')
+  })
+
+  it('周三说「下周三」→ 7 天后', () => {
+    vi.useFakeTimers()
+    vi.setSystemTime(new Date('2026-08-12T08:00:00')) // 周三
+    const r = parseQuickAdd('下周三开会')
+    expect(r.date).toBe('2026-08-19')
+  })
+
+  it('周四说「下周五」→ 8 天后', () => {
+    vi.useFakeTimers()
+    vi.setSystemTime(new Date('2026-08-13T08:00:00')) // 周四
+    const r = parseQuickAdd('下周五交表')
+    expect(r.date).toBe('2026-08-21')
   })
 })

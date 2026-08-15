@@ -116,3 +116,55 @@ describe('日历任务时间显示（Phase 3：按实际到期时间）', () => 
     expect(within(el).getByText('09:00')).toBeTruthy()
   })
 })
+
+describe('日历任务操作面板（Phase 3 #3：无需跳待办页）', () => {
+  const seedTask = (over: Record<string, unknown> = {}) =>
+    useStore.setState({ tasks: [{ id: 't1', title: '下午的文献', priority: 'medium', status: 'todo', due: '2026-08-15T15:00:00', createdAt: '', ...over }] } as any)
+
+  it('点击任务 chip → 打开操作面板（不再跳待办页）', () => {
+    seedTask()
+    render(<CalendarView />)
+    fireEvent.click(screen.getByText('日')) // 月视图格子最多 3 chip，任务可能被截断；日视图完整
+    fireEvent.click(screen.getByText('📌 下午的文献'))
+    expect(screen.getByText('📌 任务操作')).toBeTruthy()
+    expect((document.querySelector('.modal input') as HTMLInputElement).value).toBe('下午的文献')
+  })
+
+  it('标记完成 → done；再点取消完成 → todo', () => {
+    seedTask()
+    render(<CalendarView />)
+    fireEvent.click(screen.getByText('日'))
+    fireEvent.click(screen.getByText('📌 下午的文献'))
+    fireEvent.click(screen.getByText('✓ 标记完成'))
+    expect(useStore.getState().tasks.find((x) => x.id === 't1')?.status).toBe('done')
+    // 面板保持打开，可直接撤销（任务完成后会从日历消失）
+    expect(screen.getByText('↩ 取消完成')).toBeTruthy()
+    fireEvent.click(screen.getByText('↩ 取消完成'))
+    expect(useStore.getState().tasks.find((x) => x.id === 't1')?.status).toBe('todo')
+  })
+
+  it('改期（选明天）→ 保留原时间 15:00，仅换日期', () => {
+    seedTask()
+    render(<CalendarView />)
+    fireEvent.click(screen.getByText('日'))
+    fireEvent.click(screen.getByText('📌 下午的文献'))
+    fireEvent.click(document.querySelector('.dp-trigger') as HTMLElement) // 打开日期选择器
+    fireEvent.click(screen.getByText('明天')) // dp-foot 快捷
+    fireEvent.click(screen.getByText('保存修改'))
+    const t = useStore.getState().tasks.find((x) => x.id === 't1')!
+    expect(t.due).toBe('2026-08-16T15:00:00')
+  })
+
+  it('编辑标题 + 保存 → store 更新', () => {
+    seedTask()
+    render(<CalendarView />)
+    fireEvent.click(screen.getByText('日'))
+    fireEvent.click(screen.getByText('📌 下午的文献'))
+    const titleInput = document.querySelector('.modal input') as HTMLInputElement
+    fireEvent.change(titleInput, { target: { value: '改后的标题' } })
+    fireEvent.click(screen.getByText('保存修改'))
+    const t = useStore.getState().tasks.find((x) => x.id === 't1')!
+    expect(t.title).toBe('改后的标题')
+    expect(t.due).toBe('2026-08-15T15:00:00')
+  })
+})

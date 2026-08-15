@@ -7,7 +7,8 @@ import { zhCN } from 'date-fns/locale'
 import { ChevronLeft, ChevronRight, Plus, X, Calendar as CalendarIcon } from 'lucide-react'
 import { useStore, uid } from '../store'
 import { addHoursToDatetime } from '../lib/natural'
-import { CalEvent, EventType, Task } from '../types'
+import { CalEvent, EventType, Task, Priority } from '../types'
+import DatePicker from '../components/DatePicker'
 import { nextBirthdayDate, birthdayDesc } from '../lib/birthday'
 import { eventSpansDay } from '../lib/event'
 import { useToast } from '../lib/toast'
@@ -38,6 +39,9 @@ export default function CalendarView() {
   const [modalOpen, setModalOpen] = useState(false)
   const [editEvent, setEditEvent] = useState<CalEvent | null>(null)
   const [form, setForm] = useState({ title: '', type: 'personal' as EventType, start: '', end: '', note: '' })
+  // Phase 3 #3：日历任务可操作（完成/取消完成、改期、编辑标题与优先级，无需跳待办页）
+  const [taskAction, setTaskAction] = useState<Task | null>(null)
+  const [taskForm, setTaskForm] = useState({ title: '', due: '', priority: 'medium' as Priority })
 
   const events = useStore((s) => s.events)
   const addEvent = useStore((s) => s.addEvent)
@@ -46,6 +50,7 @@ export default function CalendarView() {
   const birthdays = useStore((s) => s.birthdays)
   const milestones = useStore((s) => s.milestones)
   const tasks = useStore((s) => s.tasks)
+  const updateTask = useStore((s) => s.updateTask)
   const gotoView = useStore((s) => s.setView)
 
   // 该日期上的生日(按当年农历换算)
@@ -147,9 +152,40 @@ export default function CalendarView() {
   const onItemClick = (e: { id: string }) => {
     if (isBdayItem(e)) { gotoView('birthday'); return }
     if (isMsItem(e)) { gotoView('milestone'); return }
-    if (isTaskItem(e)) { gotoView('todo'); return }
+    if (isTaskItem(e)) {
+      // Phase 3 #3：任务在日历内直接操作，不再跳待办页
+      const t = tasks.find((x) => 'task-' + x.id === e.id)
+      if (t) openTaskAction(t)
+      return
+    }
     const real = events.find((x) => x.id === e.id)
     if (real) openEdit(real)
+  }
+
+  // ===== 任务操作面板（Phase 3 #3）=====
+  const openTaskAction = (t: Task) => {
+    setTaskAction(t)
+    setTaskForm({ title: t.title, due: t.due ? t.due.slice(0, 10) : '', priority: t.priority })
+  }
+
+  const toggleTaskDone = () => {
+    if (!taskAction) return
+    const done = taskAction.status !== 'done'
+    updateTask({ ...taskAction, status: done ? 'done' : 'todo' })
+    // 面板保持打开（任务完成后会从日历时间线消失，需留在面板内才能撤销）
+    setTaskAction({ ...taskAction, status: done ? 'done' : 'todo' })
+    useToast.getState().show(done ? `已完成「${taskAction.title}」` : `已恢复「${taskAction.title}」`)
+  }
+
+  const saveTask = () => {
+    if (!taskAction || !taskForm.title.trim()) return
+    // 改期：保留原有时间部分（如有），仅替换日期；无时间 → 纯日期
+    const prevDue = taskAction.due
+    const timePart = prevDue && prevDue.length > 10 ? prevDue.slice(11) : undefined
+    const due = taskForm.due ? (timePart ? `${taskForm.due}T${timePart}` : taskForm.due) : undefined
+    updateTask({ ...taskAction, title: taskForm.title.trim(), due, priority: taskForm.priority })
+    useToast.getState().show('任务已更新')
+    setTaskAction(null)
   }
 
   // ===== 导航 =====
@@ -376,6 +412,48 @@ export default function CalendarView() {
         <span>· 图例：📌 待办到期 · 🏁 里程碑 · 🎂 生日</span>
         {view !== 'month' && <span>· 双击时间槽按该时段创建</span>}
       </div>
+
+      {/* 任务操作面板（Phase 3 #3）：完成/取消完成、改期、编辑标题与优先级 */}
+      {taskAction && (
+        <div className="modal-overlay" onClick={() => setTaskAction(null)}>
+          <div className="modal" style={{ width: 440 }} onClick={(e) => e.stopPropagation()}>
+            <div className="modal-title">📌 任务操作</div>
+            <div className="field">
+              <label>任务标题</label>
+              <input value={taskForm.title} onChange={(e) => setTaskForm({ ...taskForm, title: e.target.value })} autoFocus />
+            </div>
+            <div className="field-row">
+              <div className="field">
+                <label>截止日期（改期）</label>
+                <DatePicker value={taskForm.due || undefined} placeholder="不设截止" onChange={(v) => setTaskForm({ ...taskForm, due: v ?? '' })} />
+              </div>
+              <div className="field">
+                <label>优先级</label>
+                <select value={taskForm.priority} onChange={(e) => setTaskForm({ ...taskForm, priority: e.target.value as Priority })}>
+                  <option value="high">高</option>
+                  <option value="medium">中</option>
+                  <option value="low">低</option>
+                </select>
+              </div>
+            </div>
+            <div style={{ fontSize: 12, color: 'var(--text-3)', marginBottom: 14 }}>
+              改期会保留原时间（如有）；无时间则视为全天任务。
+            </div>
+            <div style={{ display: 'flex', justifyContent: 'space-between', gap: 8 }}>
+              <button
+                className={`btn ${taskAction.status === 'done' ? 'btn-ghost' : 'btn-primary'}`}
+                onClick={toggleTaskDone}
+              >
+                {taskAction.status === 'done' ? '↩ 取消完成' : '✓ 标记完成'}
+              </button>
+              <div style={{ display: 'flex', gap: 8 }}>
+                <button className="btn btn-ghost" onClick={() => setTaskAction(null)}>取消</button>
+                <button className="btn btn-primary" onClick={saveTask} disabled={!taskForm.title.trim()}>保存修改</button>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
 
       {modalOpen && (
         <div className="modal-overlay" onClick={() => setModalOpen(false)}>

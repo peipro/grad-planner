@@ -1,6 +1,6 @@
 import { describe, it, expect, vi, afterEach } from 'vitest'
 import { addDays, addMonths, addYears, format } from 'date-fns'
-import { parseQuickAdd, combineDateTime, hasDateHint, addHoursToDatetime, taskDueOf } from './natural'
+import { parseQuickAdd, combineDateTime, hasDateHint, addHoursToDatetime, taskDueOf, resolveCapturePlan, quickCapturePreview } from './natural'
 
 // 「下周X」正确期望值（与实现语义一致：本周周一 + 7 + 周X偏移，周一为一周起点）
 const nextWeekday = (target: number, base: Date = new Date()) =>
@@ -344,5 +344,80 @@ describe('taskDueOf（Phase 3 统一 due 构造：QuickCapture/TodoView/Today �
     setNow()
     expect(taskDueOf({ title: 'x' }, true)).toBe('2026-08-15T12:00:00')
     expect(taskDueOf({ title: 'x' })).toBeUndefined()
+  })
+})
+
+describe('resolveCapturePlan（Phase 3 #2：预览与保存共用同一决策）', () => {
+  it('auto：日期提示 + 解析成功 → 日程', () => {
+    const plan = resolveCapturePlan('明天组会', 'auto')
+    expect(plan.kind).toBe('event')
+    expect(plan.dateHintFailed).toBe(false)
+  })
+
+  it('auto：无日期提示 → 任务', () => {
+    const plan = resolveCapturePlan('买洗衣液', 'auto')
+    expect(plan.kind).toBe('task')
+  })
+
+  it('auto：有日期提示但解析失败 → 任务 + dateHintFailed（不得静默生成错误日程）', () => {
+    const plan = resolveCapturePlan('下周组会', 'auto')
+    expect(plan.kind).toBe('task')
+    expect(plan.dateHintFailed).toBe(true)
+  })
+
+  it('显式选择优先：task 模式下带日期也是任务', () => {
+    expect(resolveCapturePlan('下周三组会', 'task').kind).toBe('task')
+  })
+
+  it('显式选择优先：event 模式下无日期也是日程', () => {
+    expect(resolveCapturePlan('随便记个日程', 'event').kind).toBe('event')
+  })
+
+  it('note 模式 → 笔记', () => {
+    expect(resolveCapturePlan('记录一下想法', 'note').kind).toBe('note')
+  })
+})
+
+describe('quickCapturePreview 保存前预览（Phase 3 #2）', () => {
+  afterEach(() => vi.useRealTimers())
+
+  it('任务：date+time+area → 「任务 · 明天 · 15:00 · 生活」', () => {
+    vi.useFakeTimers(); vi.setSystemTime(new Date('2026-08-15T08:00:00'))
+    const p = resolveCapturePlan('生活 明天下午3点取快递', 'task')
+    const v = quickCapturePreview(p)
+    expect(v.kind).toBe('任务')
+    expect(v.detail).toBe('明天 · 15:00 · 生活')
+    expect(v.warning).toBeUndefined()
+  })
+
+  it('任务：仅日期 → 12:00 默认', () => {
+    const p = resolveCapturePlan('8月19日交报告', 'task')
+    const v = quickCapturePreview(p)
+    expect(v.detail).toContain('12:00')
+  })
+
+  it('任务：无日期无时间 → 「未设日期」', () => {
+    const v = quickCapturePreview(resolveCapturePlan('买洗衣液', 'task'))
+    expect(v.detail).toBe('未设日期')
+  })
+
+  it('日程：仅日期 → 09:00 默认', () => {
+    const p = resolveCapturePlan('后天组会', 'event')
+    const v = quickCapturePreview(p)
+    expect(v.kind).toBe('日程')
+    expect(v.detail).toContain('09:00')
+  })
+
+  it('解析失败 → 明确 warning（不静默）', () => {
+    const p = resolveCapturePlan('下周组会', 'auto')
+    const v = quickCapturePreview(p)
+    expect(v.warning).toContain('未能识别日期')
+    expect(v.detail).toBe('未设日期')
+  })
+
+  it('笔记 → 无明细', () => {
+    const v = quickCapturePreview(resolveCapturePlan('记一下', 'note'))
+    expect(v.kind).toBe('笔记')
+    expect(v.detail).toBe('')
   })
 })

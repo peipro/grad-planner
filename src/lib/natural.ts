@@ -1,6 +1,6 @@
 import { addDays, addWeeks, addMonths, addYears, addHours, format } from 'date-fns'
 import { TaskArea } from '../types'
-import { localDateKey } from './today'
+import { localDateKey, AREA_LABELS } from './today'
 
 export interface ParsedQuickAdd {
   title: string
@@ -279,4 +279,70 @@ export function taskDueOf(parsed: ParsedQuickAdd, defaultToToday = false): strin
   }
   if (parsed.date) return `${parsed.date}T12:00:00`
   return defaultToToday ? `${today}T12:00:00` : undefined
+}
+
+// ===== Quick Capture 类型判定 + 保存前预览（Phase 3 #2）=====
+// 预览与保存共用 resolveCapturePlan，保证「所见即所存」
+
+export type QuickCaptureMode = 'auto' | 'task' | 'event' | 'note'
+
+export interface CapturePlan {
+  kind: 'task' | 'event' | 'note'
+  parsed: ParsedQuickAdd
+  /** auto 模式：有日期提示但解析失败（回落任务且不设日期，需明确提示） */
+  dateHintFailed: boolean
+}
+
+/** 类型判定：显式选择 > auto 规则（auto：日期提示 + 解析成功 → 日程；否则 → 任务） */
+export function resolveCapturePlan(text: string, mode: QuickCaptureMode): CapturePlan {
+  const parsed = parseQuickAdd(text)
+  if (mode === 'note') return { kind: 'note', parsed, dateHintFailed: false }
+  const hint = hasDateHint(text)
+  const isEvent = mode === 'event' || (mode === 'auto' && hint && !!parsed.date)
+  return { kind: isEvent ? 'event' : 'task', parsed, dateHintFailed: mode === 'auto' && hint && !parsed.date }
+}
+
+/** 相对日期展示：今天 / 明天 / 昨天 / M月d日 */
+export function relativeDateLabel(dateStr: string): string {
+  const d = new Date(dateStr + 'T00:00:00')
+  if (isNaN(d.getTime())) return dateStr
+  const now = new Date()
+  const todayStart = new Date(now.getFullYear(), now.getMonth(), now.getDate())
+  const diff = Math.round((d.getTime() - todayStart.getTime()) / 86400000)
+  if (diff === 0) return '今天'
+  if (diff === 1) return '明天'
+  if (diff === -1) return '昨天'
+  return `${d.getMonth() + 1}月${d.getDate()}日`
+}
+
+export interface CapturePreviewText {
+  kind: string
+  detail: string
+  warning?: string
+}
+
+/** 保存前预览文案（与 parse 共用 resolveCapturePlan，预览即最终保存内容） */
+export function quickCapturePreview(plan: CapturePlan): CapturePreviewText {
+  const p = plan.parsed
+  if (plan.kind === 'note') return { kind: '笔记', detail: '' }
+
+  if (plan.kind === 'event') {
+    // 与 combineDateTime 语义一致：无 date → 今天；无 time 有 date → 09:00；都无 → 当前时刻
+    const dateLabel = p.date ? relativeDateLabel(p.date) : '今天'
+    const timeLabel = p.time ?? (p.date ? '09:00' : format(new Date(), 'HH:mm'))
+    return { kind: '日程', detail: `${dateLabel} · ${timeLabel}` }
+  }
+
+  // task：与 taskDueOf 语义一致（time → 该时间；仅 date → 12:00）
+  const parts: string[] = []
+  if (p.date) parts.push(relativeDateLabel(p.date))
+  if (p.time) parts.push(p.time)
+  else if (p.date) parts.push('12:00')
+  if (p.area) parts.push(AREA_LABELS[p.area] ?? '')
+  const detail = parts.filter(Boolean).join(' · ') || '未设日期'
+  return {
+    kind: '任务',
+    detail,
+    warning: plan.dateHintFailed ? '未能识别日期，将保存为任务（未设日期）' : undefined,
+  }
 }

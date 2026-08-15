@@ -1,15 +1,16 @@
-import { useState, useEffect } from 'react'
+import { useState, useEffect, useMemo } from 'react'
 import { Zap, X } from 'lucide-react'
 import { useStore, uid } from '../store'
 import { useToast } from '../lib/toast'
-import { parseQuickAdd, combineDateTime, hasDateHint, addHoursToDatetime, taskDueOf } from '../lib/natural'
+import {
+  combineDateTime, addHoursToDatetime, taskDueOf,
+  resolveCapturePlan, quickCapturePreview, QuickCaptureMode,
+} from '../lib/natural'
 import { EventType, TaskStatus } from '../types'
-
-type Mode = 'auto' | 'task' | 'event' | 'note'
 
 export default function QuickCapture({ onClose }: { onClose: () => void }) {
   const [input, setInput] = useState('')
-  const [mode, setMode] = useState<Mode>('auto')
+  const [mode, setMode] = useState<QuickCaptureMode>('auto')
   const addTask = useStore((s) => s.addTask)
   const addEvent = useStore((s) => s.addEvent)
   const addNote = useStore((s) => s.addNote)
@@ -19,44 +20,40 @@ export default function QuickCapture({ onClose }: { onClose: () => void }) {
     el?.focus()
   }, [])
 
+  // 保存前预览：与 parse() 共用 resolveCapturePlan，所见即所存
+  const plan = useMemo(() => resolveCapturePlan(input.trim(), mode), [input, mode])
+  const preview = useMemo(() => quickCapturePreview(plan), [plan])
+
   const parse = () => {
     const text = input.trim()
     if (!text) return
-    const parsed = parseQuickAdd(text)
+    // 单一决策来源：显式选择类型优先，auto 按日期解析结果判定
+    const p = resolveCapturePlan(text, mode)
 
-    // 显式选择 Note → 优先级最高
-    if (mode === 'note') {
-      const title = parsed.title || text
-      addNote({ id: uid(), title, content: text, tags: [], createdAt: new Date().toISOString(), updatedAt: new Date().toISOString() })
+    if (p.kind === 'note') {
+      addNote({ id: uid(), title: p.parsed.title || text, content: text, tags: [], createdAt: new Date().toISOString(), updatedAt: new Date().toISOString() })
       useToast.getState().show('已保存为笔记')
       onClose()
       return
     }
 
-    // 类型判定：显式选择 > auto 规则
-    //   auto：日期提示词 + 日期成功解析 → Event；解析失败 → 安全回落 Task 并反馈
-    const hint = hasDateHint(text)
-    const isEvent = mode === 'event' || (mode === 'auto' && hint && !!parsed.date)
-
-    if (isEvent) {
-      const start = combineDateTime(parsed.date, parsed.time)
+    if (p.kind === 'event') {
+      const start = combineDateTime(p.parsed.date, p.parsed.time)
       const end = addHoursToDatetime(start, 1)
-      addEvent({ id: uid(), title: parsed.title, type: (parsed.type ?? 'personal') as EventType, start, end })
+      addEvent({ id: uid(), title: p.parsed.title, type: (p.parsed.type ?? 'personal') as EventType, start, end })
       useToast.getState().show('已保存为日程')
     } else {
-      // Task：日期时间不丢失（date+time 组合；仅时间 → 今天该时段；仅日期 → 12:00 产品默认）
-      // 与 Today / TodoView 共用同一套 taskDueOf，禁止各自造 due 逻辑
-      const due = taskDueOf(parsed)
+      // Task：日期时间不丢失（与 Today / TodoView 共用 taskDueOf）
+      const due = taskDueOf(p.parsed)
       addTask({
-        id: uid(), title: parsed.title,
-        priority: parsed.priority ?? 'medium',
+        id: uid(), title: p.parsed.title,
+        priority: p.parsed.priority ?? 'medium',
         status: 'todo' as TaskStatus,
         due,
-        area: parsed.area,
+        area: p.parsed.area,
         createdAt: new Date().toISOString(),
       })
-      const failedHint = mode === 'auto' && hint && !parsed.date
-      useToast.getState().show(failedHint ? '未能识别日期，已保存为任务（未设日期）' : '已保存为任务')
+      useToast.getState().show(p.dateHintFailed ? '未能识别日期，已保存为任务（未设日期）' : '已保存为任务')
     }
     onClose()
   }
@@ -82,6 +79,15 @@ export default function QuickCapture({ onClose }: { onClose: () => void }) {
           />
         </div>
 
+        {/* 保存前解析预览：类型 · 日期 · 时间 · area（解析失败明确提示，不静默） */}
+        {input.trim() && (
+          <div className="qc-preview">
+            <span className="qc-kind">{preview.kind}</span>
+            {preview.detail && <span className="qc-detail">{preview.detail}</span>}
+            {preview.warning && <span className="qc-warn">⚠ {preview.warning}</span>}
+          </div>
+        )}
+
         <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 16 }}>
           <span style={{ fontSize: 12, color: 'var(--text-3)' }}>保存为：</span>
           {[
@@ -93,7 +99,7 @@ export default function QuickCapture({ onClose }: { onClose: () => void }) {
             <button
               key={m.id}
               className={`btn btn-sm ${mode === m.id ? 'btn-primary' : 'btn-ghost'}`}
-              onClick={() => setMode(m.id as Mode)}
+              onClick={() => setMode(m.id as QuickCaptureMode)}
             >
               {m.label}
             </button>
@@ -105,6 +111,17 @@ export default function QuickCapture({ onClose }: { onClose: () => void }) {
           <button className="btn btn-primary" onClick={parse} disabled={!input.trim()}>保存</button>
         </div>
       </div>
+
+      <style>{`
+        .qc-preview {
+          display: flex; align-items: center; gap: 10px; flex-wrap: wrap;
+          font-size: 12.5px; background: var(--bg-hover); border-radius: 8px;
+          padding: 7px 12px; margin: -6px 0 12px;
+        }
+        .qc-kind { font-weight: 700; color: var(--accent-text); }
+        .qc-detail { color: var(--text-2); }
+        .qc-warn { color: #e5484d; font-weight: 600; margin-left: auto; }
+      `}</style>
     </div>
   )
 }

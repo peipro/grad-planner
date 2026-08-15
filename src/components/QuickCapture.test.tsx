@@ -157,3 +157,40 @@ describe('边界与安全回落', () => {
     expect(useToast.getState().toasts.some((t) => t.message === '已保存为笔记')).toBe(true)
   })
 })
+
+describe('保存前解析预览（Phase 3 #2）', () => {
+  const previewText = () => document.querySelector('.qc-preview')?.textContent ?? ''
+
+  it('输入后实时显示「类型 · 日期 · 时间 · area」', () => {
+    const input = open('task')
+    fireEvent.change(input, { target: { value: '生活 明天下午3点取快递' } })
+    expect(previewText()).toContain('任务')
+    expect(previewText()).toContain('明天 · 15:00 · 生活')
+  })
+
+  it('切换类型按钮 → 预览随之更新（显式选择优先）', () => {
+    const input = open('task')
+    fireEvent.change(input, { target: { value: '后天组会' } })
+    expect(previewText()).toContain('任务')
+    fireEvent.click(screen.getByText('日程'))
+    expect(previewText()).toContain('日程')
+    expect(previewText()).toContain('09:00') // 日程无时间默认 09:00
+  })
+
+  it('auto 解析失败 → 明确 warning，不静默', () => {
+    const input = open()
+    fireEvent.change(input, { target: { value: '下周组会' } })
+    expect(previewText()).toContain('未能识别日期')
+  })
+
+  it('笔记模式 → 预览显示笔记', () => {
+    const input = open('note')
+    fireEvent.change(input, { target: { value: '记录一下刚才的想法' } })
+    expect(previewText()).toContain('笔记')
+  })
+
+  it('空输入 → 无预览', () => {
+    open('task')
+    expect(document.querySelector('.qc-preview')).toBeNull()
+  })
+})

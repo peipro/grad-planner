@@ -578,40 +578,122 @@ async function fetchArticle(url) {
   }
 }
 
-// ============ 翻译（Google 经代理优先，国内有道免代理兜底） ============
+// ============ 翻译（多源降级：Google 代理 → 百度官方 → MyMemory 免费） ============
 
-// 有道网页翻译接口：无 key、国内可直连（无需代理）。type=AUTO 自动识别源语言。
-async function translateViaYoudao(text, target = 'zh-CN') {
-  const url = `https://fanyi.youdao.com/translate?doctype=json&type=AUTO&tl=${target}&i=${encodeURIComponent(text)}`
-  // fetchUrl 直连优先，失败自动回退代理（国内直连即可命中）
-  const html = await fetchUrl(url, 5000)
+// 判断是否英文（无 CJK 且英文字母较多）
+function isEnglishOnly(text) {
+  if (!text) return false
+  if (/[\u4e00-\u9fff]/.test(text)) return false
+  return (text.match(/[a-zA-Z]/g) || []).length > 4
+}
+
+// 直接 POST（form-urlencoded），用于国内官方 API（无需代理）
+function postForm(url, body, timeout = 12000) {
+  return new Promise((resolve, reject) => {
+    const u = new URL(url)
+    const mod = u.protocol === 'https:' ? https : http
+    const req = mod.request({
+      hostname: u.hostname,
+      port: u.port || (u.protocol === 'https:' ? 443 : 80),
+      path: u.pathname + u.search,
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/x-www-form-urlencoded',
+        'Content-Length': Buffer.byteLength(body),
+        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64)',
+      },
+    }, (res) => {
+      let data = ''
+      res.setEncoding('utf-8')
+      res.on('data', (c) => (data += c))
+      res.on('end', () => resolve(data))
+    })
+    req.on('error', reject)
+    req.setTimeout(timeout, () => req.destroy(new Error('请求超时')))
+    req.write(body)
+    req.end()
+  })
+}
+
+// 源 1：Google（经代理，代理端口已自动探测；质量最佳）
+async function translateGoogle(chunk, target) {
+  const res = await proxiedRequest(
+    `https://translate.googleapis.com/translate_a/single?client=gtx&sl=auto&tl=${target}&dt=t&q=${encodeURIComponent(chunk)}`,
+    15000,
+  )
+  const j = JSON.parse(res)
+  const segs = (j[0] ?? []).filter((s) => s && s[0]).map((s) => s[0])
+  const out = segs.join('')
+  if (!out) throw new Error('Google 返回空')
+  return out
+}
+
+// 源 2：百度翻译开放平台（官方，国内稳定；appid+appkey 由用户配置，免费额度充足）
+async function translateBaidu(chunk, target, appid, appkey) {
+  if (!appid || !appkey) throw new Error('百度未配置密钥')
+  const crypto = require('crypto')
+  const salt = String(Date.now())
+  const sign = crypto.createHash('md5').update(appid + chunk + salt + appkey, 'utf8').digest('hex')
+  const body = new URLSearchParams({
+    q: chunk,
+    from: isEnglishOnly(chunk) ? 'en' : 'zh',
+    to: target === 'zh-CN' ? 'zh' : target,
+    appid,
+    salt,
+    sign,
+  }).toString()
+  const html = await postForm('https://fanyi-api.baidu.com/api/trans/vip/translate', body)
   const j = JSON.parse(html)
-  const tgt = j && j.translateResult && Array.isArray(j.translateResult[0]) && j.translateResult[0][0] && j.translateResult[0][0].tgt
-  if (j && j.errorCode === 0 && tgt) return tgt
-  throw new Error('有道 errorCode=' + (j && j.errorCode))
+  if (j && j.error_code) throw new Error('百度 error_code=' + j.error_code + ' ' + (j.error_msg || ''))
+  const out = ((j && j.trans_result) || []).map((s) => s.dst).join('\n')
+  if (!out) throw new Error('百度返回空')
+  return out
 }
 
-// 单段翻译：Google（经代理，代理端口已自动探测）→ 有道（国内免代理）逐级降级
-async function translateChunk(chunk, target) {
-  try {
-    const res = await proxiedRequest(
-      `https://translate.googleapis.com/translate_a/single?client=gtx&sl=auto&tl=${target}&dt=t&q=${encodeURIComponent(chunk)}`,
-      15000,
-    )
-    const j = JSON.parse(res)
-    const segs = (j[0] ?? []).filter((s) => s && s[0]).map((s) => s[0])
-    const out = segs.join('')
-    if (out) return out
-    throw new Error('Google 返回空')
-  } catch (e) {
-    console.error('[translate] Google 失败，回退有道:', e && e.message)
+// 源 3：MyMemory（免费免 key，匿名单次约 500 字符；无代理时的最后兜底）
+async function translateMyMemory(chunk, target) {
+  const src = isEnglishOnly(chunk) ? 'en' : 'zh-CN'
+  const to = target === 'zh-CN' ? 'zh-CN' : target
+  const MAXM = 450
+  const parts = []
+  let s = chunk
+  while (s.length > MAXM) { parts.push(s.slice(0, MAXM)); s = s.slice(MAXM) }
+  if (s) parts.push(s)
+  const out = []
+  for (const p of parts) {
+    const url = `https://api.mymemory.translated.net/get?q=${encodeURIComponent(p)}&langpair=${src}|${to}`
+    const html = await fetchUrl(url, 8000)
+    const j = JSON.parse(html)
+    if (j && j.responseStatus === 200 && j.responseData && j.responseData.translatedText) out.push(j.responseData.translatedText)
+    else throw new Error('MyMemory 返回异常')
   }
-  const t = await translateViaYoudao(chunk, target)
-  if (t) return t
-  throw new Error('有道返回空')
+  return out.join('')
 }
 
-async function translateText(text, target = 'zh-CN') {
+// 单段翻译：按优先级降级（Google → 百度(若配置) → MyMemory）
+async function translateChunk(chunk, target, opts) {
+  const providers = [
+    { name: 'Google', fn: () => translateGoogle(chunk, target) },
+  ]
+  if (opts && opts.baiduAppid && opts.baiduAppkey) {
+    providers.push({ name: '百度', fn: () => translateBaidu(chunk, target, opts.baiduAppid, opts.baiduAppkey) })
+  }
+  providers.push({ name: 'MyMemory', fn: () => translateMyMemory(chunk, target) })
+
+  let lastErr = null
+  for (const p of providers) {
+    try {
+      const out = await p.fn()
+      if (out) return out
+    } catch (e) {
+      lastErr = e
+      console.error(`[translate] ${p.name} 失败:`, e && e.message)
+    }
+  }
+  throw lastErr || new Error('所有翻译源均失败')
+}
+
+async function translateText(text, target = 'zh-CN', opts = null) {
   if (!text || !text.trim()) return { ok: false, error: '内容为空' }
   // 超长分段翻译（单次上限约 4000 字符）
   // 按句子边界分段，避免从单词/句子中间截断导致译文粘连
@@ -635,14 +717,14 @@ async function translateText(text, target = 'zh-CN') {
   for (const chunk of chunks) {
     try {
       const out = await Promise.race([
-        translateChunk(chunk, target),
-        new Promise((_, rej) => setTimeout(() => rej(new Error('翻译超时')), 20000)),
+        translateChunk(chunk, target, opts),
+        new Promise((_, rej) => setTimeout(() => rej(new Error('翻译超时')), 30000)),
       ])
       translated.push(out)
     } catch (e) {
       const msg = String(e && e.message ? e.message : e)
       if (msg.includes('超时') || msg.includes('timeout') || msg.includes('socket') || msg.includes('URL 校验失败')) {
-        return { ok: false, error: '翻译服务不可用（国内源与代理均连接失败），请检查网络后重试' }
+        return { ok: false, error: '翻译服务不可用（请检查网络或代理）' }
       }
       return { ok: false, error: `翻译失败：${msg}` }
     }

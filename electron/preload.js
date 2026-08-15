@@ -10,6 +10,8 @@ contextBridge.exposeInMainWorld('electronAPI', {
   setNewsConfig: (cfg) => ipcRenderer.invoke('set-news-config', cfg),
   getXCredentials: () => ipcRenderer.invoke('get-x-credentials'),
   setXCredentials: (key, secret) => ipcRenderer.invoke('set-x-credentials', key, secret),
+  getBaiduCredentials: () => ipcRenderer.invoke('get-baidu-credentials'),
+  setBaiduCredentials: (appid, appkey) => ipcRenderer.invoke('set-baidu-credentials', appid, appkey),
   fetchNews: (override) => ipcRenderer.invoke('fetch-news', override),
   fetchArticle: (url) => ipcRenderer.invoke('fetch-article', url),
   translateText: (text) => ipcRenderer.invoke('translate-text', text),

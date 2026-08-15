@@ -218,9 +218,16 @@ ipcMain.handle('fetch-article', async (_e, url) => {
   return fetchArticle(url)
 })
 
+// 百度翻译官方 API 凭据（appid/appkey 经 safeStorage 加密，renderer 仅查询是否已配置）
+const baiduCredStore = createCredentialsStore(path.join(app.getPath('userData'), 'baidu-credentials.bin'), safeStorage)
+
+ipcMain.handle('get-baidu-credentials', () => ({ configured: baiduCredStore.configured() }))
+ipcMain.handle('set-baidu-credentials', (_e, appid, appkey) => baiduCredStore.savePartial(appid, appkey))
+
 ipcMain.handle('translate-text', async (_e, text) => {
+  const b = baiduCredStore.load()
   try {
-    return await translateText(text, 'zh-CN')
+    return await translateText(text, 'zh-CN', { baiduAppid: b.key, baiduAppkey: b.secret })
   } catch (e) {
     return { ok: false, error: String(e && e.message ? e.message : e) }
   }

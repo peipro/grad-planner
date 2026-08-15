@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react'
-import { Download, Upload, Trash2, Sun, Moon, Monitor, Palette, History, Newspaper, Bell, Wifi, KeyRound, Copy } from 'lucide-react'
+import { Download, Upload, Trash2, Sun, Moon, Monitor, Palette, History, Newspaper, Bell, Wifi, KeyRound, Copy, Languages } from 'lucide-react'
 import { useStore, mergePersistedState } from '../store'
 import { validateStorageShape } from '../data/validate'
 import { useToast } from '../lib/toast'
@@ -36,6 +36,9 @@ export default function SettingsView() {
   const [xKey, setXKey] = useState('')
   const [xSecret, setXSecret] = useState('')
   const [xConfigured, setXConfigured] = useState(false)
+  const [baiduAppid, setBaiduAppid] = useState('')
+  const [baiduAppkey, setBaiduAppkey] = useState('')
+  const [baiduConfigured, setBaiduConfigured] = useState(false)
   const toast = useToast((s) => s.show)
   const [lanInfo, setLanInfo] = useState<{ port: number | null; token: string; addresses: string[] } | null>(null)
   const [lanCopiedIdx, setLanCopiedIdx] = useState<number | null>(null)
@@ -51,6 +54,11 @@ export default function SettingsView() {
     if (api?.lanInfo) {
       api.lanInfo().then((info: { port: number | null; token: string; addresses: string[] }) => {
         if (info) setLanInfo(info)
+      }).catch(() => {})
+    }
+    if (api?.getBaiduCredentials) {
+      api.getBaiduCredentials().then((c: { configured: boolean }) => {
+        if (c) setBaiduConfigured(Boolean(c.configured))
       }).catch(() => {})
     }
   }, [])
@@ -435,6 +443,33 @@ export default function SettingsView() {
             />
             启用 X 来源（需填写 Key + Secret，且账号有 API 读取额度）
           </label>
+        </div>
+
+        <div className="card setting-card" style={{ gridColumn: '1 / -1' }}>
+          <div className="setting-title"><Languages size={15} /> 翻译（百度官方接口，可选）</div>
+          <div style={{ fontSize: 12, color: 'var(--text-2)', lineHeight: 1.8, marginBottom: 10 }}>
+            翻译默认走 Google（经代理）；配置百度翻译开放平台的 APP ID + 密钥后，将作为<b>国内稳定兜底</b>（代理不可用时也能翻译）。
+            免费额度每月约 50 万字符，注册地址：fanyi-api.baidu.com。
+            {baiduConfigured && <span style={{ color: '#2f9e6e' }}> · 已配置密钥</span>}
+          </div>
+          <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap' }}>
+            <input
+              type="password"
+              placeholder={baiduConfigured ? '已配置（留空保持不变）' : '百度翻译 APP ID'}
+              value={baiduAppid}
+              onChange={(e) => setBaiduAppid(e.target.value)}
+              onBlur={() => (window as any).electronAPI?.setBaiduCredentials(baiduAppid, baiduAppkey)}
+              style={{ flex: 1, minWidth: 200, padding: '8px 12px', border: '1px solid var(--border)', borderRadius: 8, background: 'var(--bg)', color: 'var(--text-1)', fontSize: 13 }}
+            />
+            <input
+              type="password"
+              placeholder={baiduConfigured ? '已配置（留空保持不变）' : '百度翻译 密钥（Key）'}
+              value={baiduAppkey}
+              onChange={(e) => setBaiduAppkey(e.target.value)}
+              onBlur={() => (window as any).electronAPI?.setBaiduCredentials(baiduAppid, baiduAppkey)}
+              style={{ flex: 1, minWidth: 200, padding: '8px 12px', border: '1px solid var(--border)', borderRadius: 8, background: 'var(--bg)', color: 'var(--text-1)', fontSize: 13 }}
+            />
+          </div>
         </div>
 
         <div className="card setting-card">
